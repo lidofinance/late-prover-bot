@@ -1,0 +1,96 @@
+services:
+
+  grafana:
+    image: grafana/grafana:latest
+    sysctls:
+      - net.ipv6.conf.lo.disable_ipv6=0
+      - net.ipv6.conf.all.disable_ipv6=0
+    container_name: grafana
+    hostname: grafana.local
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+    links:
+      - prometheus:prometheus
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=MYPASSWORT
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=locahost
+      - GF_SMTP_ENABLED=false
+      - GF_SMTP_HOST=smtp.gmail.com:587
+      - GF_SMTP_USER=myadrress@gmail.com
+      - GF_SMTP_PASSWORD=mypassword
+      - GF_SMTP_FROM_ADDRESS=myaddress@gmail.com
+    ports:
+      - "8082:3000"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus:/etc/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+
+  daemon:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: prover-daemon
+    restart: unless-stopped
+    environment:
+      - HTTP_PORT=${HTTP_PORT:-8080}
+      - DRY_RUN=${DRY_RUN:-false}
+      - CHAIN_ID=${CHAIN_ID}
+      - KEYSAPI_API_URLS=${KEYSAPI_API_URLS}
+      - EL_RPC_URLS=${EL_RPC_URLS}
+      - CL_API_URLS=${CL_API_URLS}
+      - CSM_ADDRESS=${CSM_ADDRESS}
+      - VERIFIER_ADDRESS=${VERIFIER_ADDRESS}
+      - TX_SIGNER_PRIVATE_KEY=${TX_SIGNER_PRIVATE_KEY:-}
+      - START_ROOT=${START_ROOT:-}
+    expose:
+      - "${HTTP_PORT:-8080}"
+    ports:
+      - "${EXTERNAL_HTTP_PORT:-${HTTP_PORT:-8080}}:${HTTP_PORT:-8080}"
+    volumes:
+      - daemon:/app/storage/
+    depends_on:
+      - prometheus
+
+  #
+  # CLI tools
+  #
+  withdrawal:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.cli
+    entrypoint:
+      - yarn
+      - withdrawal
+    container_name: prover-cli-withdrawal
+    restart: no
+    environment:
+      - DRY_RUN=${DRY_RUN:-false}
+      - CHAIN_ID=${CHAIN_ID}
+      - EL_RPC_URLS=${EL_RPC_URLS}
+      - CL_API_URLS=${CL_API_URLS}
+      - CSM_ADDRESS=${CSM_ADDRESS}
+      - VERIFIER_ADDRESS=${VERIFIER_ADDRESS}
+      - TX_SIGNER_PRIVATE_KEY=${TX_SIGNER_PRIVATE_KEY:-}
+
+
+volumes:
+  daemon:
+  grafana:
+  prometheus:
