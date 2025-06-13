@@ -1,29 +1,32 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
-import { Inject, Injectable, LoggerService } from '@nestjs/common';
+import { Inject, Injectable, LoggerService, Logger } from '@nestjs/common';
 import { ethers } from 'ethers';
 
 import { Consensus } from '../providers/consensus/consensus';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
-import { ValidatorWitness } from '../contracts/types';
+import { ProvableBeaconBlockHeader, ValidatorWitness } from '../contracts/types';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
 import { generateValidatorProof, toHex } from '../helpers/proofs';
 import type { ssz as sszType } from '@lodestar/types';
 import { ConfigService } from '../config/config.service';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
+import { Execution } from '../providers/execution/execution';
+import { BeaconBlockHeader } from '../contracts/types';
 
 let ssz: typeof sszType;
 
 @Injectable()
 export class ProverService {
   private readonly SHARD_COMMITTEE_PERIOD_IN_SECONDS: number;
+  private readonly logger = new Logger(ProverService.name);
 
   constructor(
-    @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
     protected readonly consensus: Consensus,
     protected readonly exitRequests: ExitRequestsContract,
     protected readonly verifier: VerifierContract,
     protected readonly config: ConfigService,
     protected readonly nor: NodeOperatorsRegistryContract,
+    protected readonly execution: Execution,
   ) {
     this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = this.config.get('SHARD_COMMITTEE_PERIOD_IN_SECONDS');
   }
@@ -90,22 +93,13 @@ export class ProverService {
     // Get deadline state once for the group
     const deadlineState = await this.consensus.getState(deadlineSlot);
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
-    
+
     if (!deadlineStateView) {
       this.logger.error(`[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`);
       return { validatorWitnesses: [], processedValidators: 0, skippedValidators: validatorGroup.length, deadlineStateView: null };
     }
 
-    const deadlineHeader = deadlineStateView.latestBlockHeader;
-    const rootsTimestamp = ethers.BigNumber.from(this.consensus.genesisTimestamp)
-      .add(ethers.BigNumber.from(deadlineHeader.slot).mul(Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)));
-
-    this.logger.log(
-      `[Blocks ${fromBlock}-${toBlock}] Deadline state details:` +
-      `\n  Header slot: ${deadlineHeader.slot}` +
-      `\n  Header proposer: ${deadlineHeader.proposerIndex}` +
-      `\n  Parent root: ${deadlineHeader.parentRoot.toString()}`
-    );
+    const rootsTimestamp = this.consensus.genesisTimestamp + Number(deadlineStateView.latestBlockHeader.slot) * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
 
     const validatorWitnesses: ValidatorWitness[] = [];
     let processedValidators = 0;
@@ -148,7 +142,7 @@ export class ProverService {
     deadlineStateView: any,
     stateView: any,
     deliveryTimestamp: number,
-    rootsTimestamp: ethers.BigNumber,
+    rootsTimestamp: number,
     fromBlock: number,
     toBlock: number
   ): Promise<{ witness: ValidatorWitness | null }> {
@@ -174,7 +168,7 @@ export class ProverService {
 
     const secondsSinceExitIsEligible = this.getSecondsSinceExitIsEligible(
       eligibleExitRequestTimestamp,
-      rootsTimestamp.toNumber()
+      rootsTimestamp,
     );
 
     this.logger.log(
@@ -186,7 +180,7 @@ export class ProverService {
 
     const isPenaltyApplicable = await this.nor.isValidatorExitDelayPenaltyApplicable(
       Number(validator.nodeOpId),
-      rootsTimestamp.toNumber(),
+      rootsTimestamp,
       validator.validatorPubkey,
       secondsSinceExitIsEligible
     );
@@ -209,13 +203,13 @@ export class ProverService {
     );
 
     const witness: ValidatorWitness = {
-      exitRequestIndex: validatorIndex,
+      exitRequestIndex: Number(validatorIndex),
       withdrawalCredentials: toHex(deadlineStateValidator.withdrawalCredentials),
-      effectiveBalance: deadlineStateValidator.effectiveBalance,
+      effectiveBalance: Number(deadlineStateValidator.effectiveBalance),
       slashed: Boolean(deadlineStateValidator.slashed),
-      activationEligibilityEpoch: deadlineStateValidator.activationEligibilityEpoch,
-      activationEpoch: deadlineStateValidator.activationEpoch,
-      withdrawableEpoch: deadlineStateValidator.withdrawableEpoch,
+      activationEligibilityEpoch: Number(deadlineStateValidator.activationEligibilityEpoch),
+      activationEpoch: Number(deadlineStateValidator.activationEpoch),
+      withdrawableEpoch: Number(deadlineStateValidator.withdrawableEpoch),
       validatorProof: proof.witnesses.map(toHex),
       moduleId: Number(validator.moduleId),
       nodeOpId: Number(validator.nodeOpId),
@@ -228,29 +222,46 @@ export class ProverService {
 
   private async verifyValidatorGroup(
     validatorWitnesses: ValidatorWitness[],
-    deadlineHeader: any,
+    beaconBlock: ProvableBeaconBlockHeader,
     exitRequestsData: any,
     fromBlock: number,
     toBlock: number
   ): Promise<void> {
     const verificationStartTime = Date.now();
-    const beaconBlock = {
-      header: {
-        slot: ethers.BigNumber.from(deadlineHeader.slot),
-        proposerIndex: ethers.BigNumber.from(deadlineHeader.proposerIndex),
-        parentRoot: deadlineHeader.parentRoot.toString(),
-        stateRoot: deadlineHeader.stateRoot.toString(),
-        bodyRoot: deadlineHeader.bodyRoot.toString(),
-      },
-      rootsTimestamp: ethers.BigNumber.from(this.consensus.genesisTimestamp)
-        .add(ethers.BigNumber.from(deadlineHeader.slot).mul(Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)))
-    };
 
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
       `\n  Witnesses count: ${validatorWitnesses.length}` +
       `\n  Block slot: ${beaconBlock.header.slot}`
     );
+
+    // Add detailed debug logging
+    this.logger.debug('Beacon block:', JSON.stringify({
+      header: {
+        slot: beaconBlock.header.slot.toString(),
+        proposerIndex: beaconBlock.header.proposerIndex.toString(),
+        parentRoot: beaconBlock.header.parentRoot,
+        stateRoot: beaconBlock.header.stateRoot,
+        bodyRoot: beaconBlock.header.bodyRoot
+      },
+      rootsTimestamp: beaconBlock.rootsTimestamp.toString()
+    }, null, 2));
+
+    // Log first witness as example
+    if (validatorWitnesses.length > 0) {
+      this.logger.debug('Example validator witness:', JSON.stringify({
+        exitRequestIndex: validatorWitnesses[0].exitRequestIndex.toString(),
+        withdrawalCredentials: validatorWitnesses[0].withdrawalCredentials,
+        effectiveBalance: validatorWitnesses[0].effectiveBalance.toString(),
+        slashed: validatorWitnesses[0].slashed,
+        activationEligibilityEpoch: validatorWitnesses[0].activationEligibilityEpoch.toString(),
+        activationEpoch: validatorWitnesses[0].activationEpoch.toString(),
+        withdrawableEpoch: validatorWitnesses[0].withdrawableEpoch.toString(),
+        moduleId: validatorWitnesses[0].moduleId.toString(),
+        nodeOpId: validatorWitnesses[0].nodeOpId.toString(),
+        pubkey: validatorWitnesses[0].pubkey
+      }, null, 2));
+    }
 
     await this.verifier.verifyValidatorExitDelay(
       beaconBlock,
@@ -337,9 +348,21 @@ export class ProverService {
 
           if (validatorWitnesses.length > 0) {
             // add historical calls
+            const beaconBlock = {
+              header: {
+                slot: ethers.BigNumber.from(deadlineStateView.latestBlockHeader.slot),
+                proposerIndex: ethers.BigNumber.from(deadlineStateView.latestBlockHeader.proposerIndex),
+                parentRoot: ethers.utils.hexlify(deadlineStateView.latestBlockHeader.parentRoot),
+                stateRoot: ethers.utils.hexlify(deadlineStateView.latestBlockHeader.stateRoot),
+                bodyRoot: ethers.utils.hexlify(deadlineStateView.latestBlockHeader.bodyRoot),
+              },
+              rootsTimestamp: ethers.BigNumber.from(this.consensus.genesisTimestamp)
+                .add(ethers.BigNumber.from(deadlineStateView.latestBlockHeader.slot)
+                  .mul(ethers.BigNumber.from(this.consensus.beaconConfig.SECONDS_PER_SLOT)))
+            };
             await this.verifyValidatorGroup(
               validatorWitnesses,
-              deadlineStateView.latestBlockHeader,
+              beaconBlock,
               exitRequest.exitRequestsData,
               fromBlock,
               toBlock

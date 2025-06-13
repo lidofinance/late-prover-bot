@@ -6,11 +6,11 @@ export interface ExitRequestsData {
 }
 
 export interface BeaconBlockHeader {
-  slot: ethers.BigNumber;
-  proposerIndex: ethers.BigNumber;
-  parentRoot: string;
-  stateRoot: string;
-  bodyRoot: string;
+  slot: ethers.BigNumber; // uint64
+  proposerIndex: ethers.BigNumber; // uint64
+  parentRoot: string; // bytes32
+  stateRoot: string; // bytes32
+  bodyRoot: string; // bytes32
 }
 
 export interface ProvableBeaconBlockHeader {

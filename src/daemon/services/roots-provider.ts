@@ -41,10 +41,10 @@ export class RootsProvider {
 
     // Check if we're already at the finalized root
     const lastProcessed = this.rootsStack.getLastProcessed();
-    if (lastProcessed?.blockRoot === finalized.root) {
-      this.logger.log(`Already at finalized root [${finalized.root}]`);
-      return undefined;
-    }
+    //if (lastProcessed?.blockRoot === finalized.root) {
+    //  this.logger.log(`Already at finalized root [${finalized.root}]`);
+    //  return undefined;
+    //}
 
     // Try processing chain
     return this.processNextRoot(finalized);
