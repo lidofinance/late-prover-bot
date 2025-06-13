@@ -336,6 +336,7 @@ export class ProverService {
           totalSkippedValidators += skippedValidators;
 
           if (validatorWitnesses.length > 0) {
+            // add historical calls
             await this.verifyValidatorGroup(
               validatorWitnesses,
               deadlineStateView.latestBlockHeader,

@@ -40,7 +40,7 @@ export class RootsProcessor {
       const result = await this.processBlockRoot(header, finalizedHeader);
 
       if (!result.success) {
-        this.logger.error(`Failed to process root [${header.root}]`, result.error);
+        this.logger.error(`Failed to process root [${header.root}]`, result.error?.message);
         return;
       }
 
@@ -64,8 +64,8 @@ export class RootsProcessor {
       const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
       const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
       const rootSlot: RootSlot = {
-        blockRoot: prevHeader.root,
-        slotNumber: prevBlock.slot,
+        blockRoot: finalizedHeader.root,
+        slotNumber: finalizedBlock.slot,
       };
       const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash)
       const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash)

@@ -56,6 +56,10 @@ export class EnvironmentVariables {
 
   @IsNotEmpty()
   @IsString()
+  public LIDO_LOCATOR_ADDRESS: string;
+
+  @IsNotEmpty()
+  @IsString()
   @ValidateIf((vars) => !vars.DRY_RUN)
   public TX_SIGNER_PRIVATE_KEY: string;
 

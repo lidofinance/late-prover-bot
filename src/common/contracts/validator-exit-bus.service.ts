@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
 import { ExitRequestsData } from './types';
+import { join } from 'path';
 
 interface ReportData {
   consensusVersion: number;
@@ -26,16 +27,14 @@ export class ExitRequestsContract {
     protected readonly config: ConfigService,
     protected readonly execution: Execution,
   ) {
-    const abi = [
-      'struct ReportData{uint256 consensusVersion;uint256 refSlot;uint256 requestsCount;uint256 dataFormat;bytes data;}',
-      'function submitReportData(ReportData calldata data, uint256 contractVersion) external',
-      'function getDeliveryTimestamp(bytes32 exitRequestsHash) external view returns (uint256 timestamp)',
-      'event ExitDataProcessing(bytes32 exitRequestsHash)',
-    ];
+    const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
+    
+    // Create interface from the ABI
+    const iface = new ethers.utils.Interface(contractJson);
     
     this.contract = new ethers.Contract(
       this.config.get('VEB_ADDRESS'),
-      abi,
+      iface,
       this.execution.provider,
     );
   }

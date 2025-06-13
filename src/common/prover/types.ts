@@ -1,3 +1,5 @@
+import { BigNumber } from 'ethers';
+
 export interface KeyInfo {
   operatorId: number;
   keyIndex: number;
@@ -23,7 +25,7 @@ export type HistoricalWithdrawalsProofPayload = {
 
 export type ProvableBeaconBlockHeader = {
   header: BeaconBlockHeader;
-  rootsTimestamp: number;
+  rootsTimestamp: BigNumber;
 };
 
 export type HistoricalHeaderWitness = {
@@ -33,8 +35,8 @@ export type HistoricalHeaderWitness = {
 };
 
 export type BeaconBlockHeader = {
-  slot: number;
-  proposerIndex: number;
+  slot: BigNumber;
+  proposerIndex: BigNumber;
   parentRoot: string; // bytes32
   stateRoot: string; // bytes32
   bodyRoot: string; // bytes32
