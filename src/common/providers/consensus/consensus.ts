@@ -25,8 +25,6 @@ export type SupportedBlock =
   | ValueOfFields<typeof ssz.deneb.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.electra.BeaconBlock.fields>;
 
-export type SupportedWithdrawal = ValueOfFields<typeof ssz.capella.Withdrawal.fields>;
-
 export interface State {
   bodyBytes: Uint8Array;
   forkName: keyof typeof SupportedFork;

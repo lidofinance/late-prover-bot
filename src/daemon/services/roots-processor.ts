@@ -34,8 +34,8 @@ export class RootsProcessor {
   @TrackTask('process-root')
   public async process(header: BlockHeaderResponse): Promise<void> {
     try {
-      this.logger.log(`🛃 Starting to process root [${header.root}]`);
       const finalizedHeader = await this.consensus.getBeaconHeader('finalized');
+      this.logger.log(`🛃 Starting to process root [${header.root} ::: ${finalizedHeader.root}]`);
 
       const result = await this.processBlockRoot(header, finalizedHeader);
 
@@ -73,13 +73,13 @@ export class RootsProcessor {
       const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number
       const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number
       // Add to stack first in case we need to reprocess
+      // todo: stack handling seems incorrect
       await this.addToProcessingStack(rootSlot);
 
       // Process the block
       await this.prover.handleBlock(prevBlockNumber, finalizedBlockNumber);
 
       return { success: true, rootSlot };
-
     } catch (error) {
       return {
         success: false,

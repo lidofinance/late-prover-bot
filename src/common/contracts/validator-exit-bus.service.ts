@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ethers } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
 import { ExitRequestsData } from './types';
@@ -9,7 +9,7 @@ interface ReportData {
   consensusVersion: number;
   refSlot: number;
   requestsCount: number;
-  dataFormat: number;
+  dataFormat: BigNumber;
   data: string;
 }
 
@@ -81,12 +81,18 @@ export class ExitRequestsContract {
 
           // Decode the submitReportData transaction
           const decodedData = this.contract.interface.decodeFunctionData('submitReportData', tx.data);
+
+          // Log the decoded data to inspect its structure
+          this.logger.debug('Decoded Data:', decodedData);
+
           const reportData = decodedData.data as ReportData;
 
-          // Create ExitRequestsData from the report data
+          // Log individual fields before converting to BigNumber
+          this.logger.debug('Report Data:', reportData);
+
           const exitRequestsData: ExitRequestsData = {
             data: reportData.data,
-            dataFormat: reportData.dataFormat,
+            dataFormat: reportData.dataFormat.toNumber(), // This might be causing the issue
           };
 
           results.push({

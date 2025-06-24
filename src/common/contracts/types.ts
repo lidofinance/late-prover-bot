@@ -6,8 +6,8 @@ export interface ExitRequestsData {
 }
 
 export interface BeaconBlockHeader {
-  slot: ethers.BigNumber; // uint64
-  proposerIndex: ethers.BigNumber; // uint64
+  slot: number; // uint64
+  proposerIndex: number // uint64
   parentRoot: string; // bytes32
   stateRoot: string; // bytes32
   bodyRoot: string; // bytes32
@@ -15,7 +15,13 @@ export interface BeaconBlockHeader {
 
 export interface ProvableBeaconBlockHeader {
   header: BeaconBlockHeader;
-  rootsTimestamp: ethers.BigNumber;
+  rootsTimestamp: number;
+}
+
+export interface HistoricalHeaderWitness {
+  header: BeaconBlockHeader;
+  rootGIndex: string;
+  proof: Uint8Array[];
 }
 
 export interface ValidatorWitness {
@@ -25,7 +31,7 @@ export interface ValidatorWitness {
   slashed: boolean;
   activationEligibilityEpoch: number; // uint64
   activationEpoch: number; // uint64
-  withdrawableEpoch: number; // uint64
+  withdrawableEpoch: any; // uint64
   validatorProof: string[]; // bytes32[]
   moduleId: number;
   nodeOpId: number;

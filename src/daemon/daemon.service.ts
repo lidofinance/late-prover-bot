@@ -43,10 +43,9 @@ export class DaemonService implements OnModuleInit {
   }
 
   private async baseRun() {
-    this.logger.log('🗿 Get finalized header');
-    const header = await this.rootsProvider.getNext();
-    if (header) {
-      await this.rootsProcessor.process(header);
+    const prevHeader = await this.rootsProvider.getNext();
+    if (prevHeader) {
+      await this.rootsProcessor.process(prevHeader);
       return;
     }
     this.logger.log(`💤 Wait for the next finalized root`);

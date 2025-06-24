@@ -32,6 +32,7 @@ export class RootsProvider {
    * - No next root found in the processing chain
    */
   public async getNext(): Promise<BlockHeaderResponse | undefined> {
+    this.logger.log('Get previous processed header');
     // Get finalized header first as it's needed for validation
     const finalized = await this.consensus.getBeaconHeader('finalized');
     if (!finalized) {
@@ -41,10 +42,10 @@ export class RootsProvider {
 
     // Check if we're already at the finalized root
     const lastProcessed = this.rootsStack.getLastProcessed();
-    //if (lastProcessed?.blockRoot === finalized.root) {
-    //  this.logger.log(`Already at finalized root [${finalized.root}]`);
-    //  return undefined;
-    //}
+    if (lastProcessed?.blockRoot === finalized.root) {
+      this.logger.log(`Already at finalized root [${finalized.root}]`);
+      return undefined;
+    }
 
     // Try processing chain
     return this.processNextRoot(finalized);
