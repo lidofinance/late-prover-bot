@@ -1,31 +1,23 @@
+import type { ssz as sszType } from '@lodestar/types';
 import { Injectable, Logger } from '@nestjs/common';
 import { ethers } from 'ethers';
 
-import { Consensus } from '../providers/consensus/consensus';
-import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
-import { ProvableBeaconBlockHeader, ValidatorWitness, HistoricalHeaderWitness } from '../contracts/types';
-import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
-import { generateValidatorProof, toHex, verifyProof, generateHistoricalStateProof } from '../helpers/proofs';
-import type { ssz as sszType } from '@lodestar/types';
 import { ConfigService } from '../config/config.service';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
+import { HistoricalHeaderWitness, ProvableBeaconBlockHeader, ValidatorWitness } from '../contracts/types';
+import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
+import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
+import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
+import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
-import { ByteVectorType, VectorCompositeType } from "@chainsafe/ssz";
-import { concatGindices, createProof, ProofType, SingleProof, Tree } from '@chainsafe/persistent-merkle-tree';
-import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
 
 let ssz: typeof sszType;
-
-const Byte32 = new ByteVectorType(32);
-const BLOCK_ROOT_VECTOR = new VectorCompositeType(Byte32, 8192);
-
-const SLOTS_PER_HISTORICAL_ROOT = 8192;
 
 @Injectable()
 export class ProverService {
   private readonly SHARD_COMMITTEE_PERIOD_IN_SECONDS: number;
   private readonly logger = new Logger(ProverService.name);
-  private readonly FAR_FUTURE_EPOCH = "18446744073709551615"; // 2^64 - 1
+  private readonly FAR_FUTURE_EPOCH = '18446744073709551615'; // 2^64 - 1
 
   constructor(
     protected readonly consensus: Consensus,
@@ -38,31 +30,24 @@ export class ProverService {
     this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = this.config.get('SHARD_COMMITTEE_PERIOD_IN_SECONDS');
   }
 
-  private getEligibleExitRequestTimestamp(
-    deliveredTimestamp: number,
-    activationEpoch: number,
-  ): number {
+  private getEligibleExitRequestTimestamp(deliveredTimestamp: number, activationEpoch: number): number {
     // The earliest a validator can voluntarily exit is after the Shard Committee Period
     // subsequent to its activation epoch.
-    const earliestPossibleVoluntaryExitTimestamp = this.consensus.genesisTimestamp +
-      (activationEpoch * Number(this.consensus.beaconConfig.SLOTS_PER_EPOCH) * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)) +
+    const earliestPossibleVoluntaryExitTimestamp =
+      this.consensus.genesisTimestamp +
+      activationEpoch *
+        Number(this.consensus.beaconConfig.SLOTS_PER_EPOCH) *
+        Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
       this.SHARD_COMMITTEE_PERIOD_IN_SECONDS;
 
     // The actual eligible timestamp is the max between the exit request submission time
     // and the earliest possible voluntary exit time.
-    const eligibleExitRequestTimestamp = Math.max(
-      deliveredTimestamp,
-      earliestPossibleVoluntaryExitTimestamp
-    );
+    const eligibleExitRequestTimestamp = Math.max(deliveredTimestamp, earliestPossibleVoluntaryExitTimestamp);
 
     return eligibleExitRequestTimestamp;
   }
 
-
-  private getSecondsSinceExitIsEligible(
-    eligibleExitRequestTimestamp: number,
-    referenceSlotTimestamp: number
-  ): number {
+  private getSecondsSinceExitIsEligible(eligibleExitRequestTimestamp: number, referenceSlotTimestamp: number): number {
     return referenceSlotTimestamp - eligibleExitRequestTimestamp;
   }
 
@@ -78,23 +63,27 @@ export class ProverService {
   }
 
   private async processValidatorGroup(
-    validatorGroup: { validator: ReturnType<typeof this.decodeValidatorsData>[0], activationEpoch: number, exitDeadlineEpoch: number }[],
+    validatorGroup: {
+      validator: ReturnType<typeof this.decodeValidatorsData>[0];
+      activationEpoch: number;
+      exitDeadlineEpoch: number;
+    }[],
     deadlineSlot: number,
     stateView: any,
     deliveryTimestamp: number,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<{
-    validatorWitnesses: ValidatorWitness[],
-    processedValidators: number,
-    skippedValidators: number,
-    deadlineStateView: any
+    validatorWitnesses: ValidatorWitness[];
+    processedValidators: number;
+    skippedValidators: number;
+    deadlineStateView: any;
   }> {
     const groupStartTime = Date.now();
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
-      `\n  Slot: ${deadlineSlot}` +
-      `\n  Validators in group: ${validatorGroup.length}`
+        `\n  Slot: ${deadlineSlot}` +
+        `\n  Validators in group: ${validatorGroup.length}`,
     );
 
     // Get deadline state once for the group
@@ -102,11 +91,20 @@ export class ProverService {
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
 
     if (!deadlineStateView) {
-      this.logger.error(`[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`);
-      return { validatorWitnesses: [], processedValidators: 0, skippedValidators: validatorGroup.length, deadlineStateView: null };
+      this.logger.error(
+        `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`,
+      );
+      return {
+        validatorWitnesses: [],
+        processedValidators: 0,
+        skippedValidators: validatorGroup.length,
+        deadlineStateView: null,
+      };
     }
 
-    const rootsTimestamp = this.consensus.genesisTimestamp + Number(deadlineStateView.latestBlockHeader.slot) * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
+    const rootsTimestamp =
+      this.consensus.genesisTimestamp +
+      Number(deadlineStateView.latestBlockHeader.slot) * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
 
     const validatorWitnesses: ValidatorWitness[] = [];
     let processedValidators = 0;
@@ -122,7 +120,7 @@ export class ProverService {
         deliveryTimestamp,
         rootsTimestamp,
         fromBlock,
-        toBlock
+        toBlock,
       );
 
       if (witness) {
@@ -135,8 +133,8 @@ export class ProverService {
 
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Deadline slot group processing completed:` +
-      `\n  Slot: ${deadlineSlot}` +
-      `\n  Processing time: ${Date.now() - groupStartTime}ms`
+        `\n  Slot: ${deadlineSlot}` +
+        `\n  Processing time: ${Date.now() - groupStartTime}ms`,
     );
 
     return { validatorWitnesses, processedValidators, skippedValidators, deadlineStateView };
@@ -151,7 +149,7 @@ export class ProverService {
     deliveryTimestamp: number,
     rootsTimestamp: number,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<ValidatorWitness | null> {
     const validatorStartTime = Date.now();
     const validatorIndex = Number(validator.validatorIndex);
@@ -160,43 +158,37 @@ export class ProverService {
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
       this.logger.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator already exited:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}` +
-        `\n  Current exit epoch: ${deadlineStateValidator.exitEpoch}` +
-        `\n  Required exit epoch: ${exitDeadlineEpoch}`
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Current exit epoch: ${deadlineStateValidator.exitEpoch}` +
+          `\n  Required exit epoch: ${exitDeadlineEpoch}`,
       );
       return null;
     }
 
-    const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(
-      deliveryTimestamp,
-      activationEpoch,
-    );
+    const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveryTimestamp, activationEpoch);
 
-    const secondsSinceExitIsEligible = this.getSecondsSinceExitIsEligible(
-      eligibleExitRequestTimestamp,
-      rootsTimestamp,
-    );
+    const secondsSinceExitIsEligible = this.getSecondsSinceExitIsEligible(eligibleExitRequestTimestamp, rootsTimestamp);
 
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Validator eligibility check:` +
-      `\n  Index: ${validatorIndex}` +
-      `\n  Seconds since eligible: ${secondsSinceExitIsEligible}` +
-      `\n  Processing time: ${Date.now() - validatorStartTime}ms`
+        `\n  Index: ${validatorIndex}` +
+        `\n  Seconds since eligible: ${secondsSinceExitIsEligible}` +
+        `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
     );
 
     const isPenaltyApplicable = await this.nor.isValidatorExitDelayPenaltyApplicable(
       Number(validator.nodeOpId),
       rootsTimestamp,
       validator.validatorPubkey,
-      secondsSinceExitIsEligible
+      secondsSinceExitIsEligible,
     );
 
     if (!isPenaltyApplicable) {
       this.logger.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}`
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}`,
       );
       return null;
     }
@@ -205,15 +197,13 @@ export class ProverService {
     const proof = generateValidatorProof(stateView, validatorIndex);
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Generated validator proof:` +
-      `\n  Index: ${validatorIndex}` +
-      `\n  Proof generation time: ${Date.now() - proofStartTime}ms`
+        `\n  Index: ${validatorIndex}` +
+        `\n  Proof generation time: ${Date.now() - proofStartTime}ms`,
     );
 
-    this.logger.debug(`Raw withdrawableEpoch value:`, deadlineStateValidator.withdrawableEpoch);
-
-    var withdrawableEpoch = deadlineStateValidator.withdrawableEpoch
+    let withdrawableEpoch = deadlineStateValidator.withdrawableEpoch;
     if (withdrawableEpoch == Infinity) {
-      withdrawableEpoch = this.FAR_FUTURE_EPOCH
+      withdrawableEpoch = this.FAR_FUTURE_EPOCH;
     }
 
     const witness: ValidatorWitness = {
@@ -227,7 +217,7 @@ export class ProverService {
       validatorProof: proof.witnesses.map(toHex),
       moduleId: Number(validator.moduleId),
       nodeOpId: Number(validator.nodeOpId),
-      pubkey: validator.validatorPubkey
+      pubkey: validator.validatorPubkey,
     };
 
     this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Added validator ${validatorIndex} to witnesses`);
@@ -239,49 +229,49 @@ export class ProverService {
     beaconBlock: ProvableBeaconBlockHeader,
     exitRequestsData: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<void> {
     const verificationStartTime = Date.now();
 
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
-      `\n  Witnesses count: ${validatorWitnesses.length}` +
-      `\n  Block slot: ${beaconBlock.header.slot}`
+        `\n  Witnesses count: ${validatorWitnesses.length}` +
+        `\n  Block slot: ${beaconBlock.header.slot}`,
     );
 
     // Add detailed debug logging
-    this.logger.debug('Beacon block:', JSON.stringify({
-      header: {
-        slot: beaconBlock.header.slot.toString(),
-        proposerIndex: beaconBlock.header.proposerIndex.toString(),
-        parentRoot: beaconBlock.header.parentRoot,
-        stateRoot: beaconBlock.header.stateRoot,
-        bodyRoot: beaconBlock.header.bodyRoot
-      },
-      rootsTimestamp: beaconBlock.rootsTimestamp.toString()
-    }, null, 2));
+    this.logger.debug(
+      'Beacon block:',
+      JSON.stringify(
+        {
+          header: {
+            slot: beaconBlock.header.slot.toString(),
+            proposerIndex: beaconBlock.header.proposerIndex.toString(),
+            parentRoot: beaconBlock.header.parentRoot,
+            stateRoot: beaconBlock.header.stateRoot,
+            bodyRoot: beaconBlock.header.bodyRoot,
+          },
+          rootsTimestamp: beaconBlock.rootsTimestamp.toString(),
+        },
+        null,
+        2,
+      ),
+    );
 
     // Log first witness as example
     if (validatorWitnesses.length > 0) {
       this.logger.debug('ValidatorWitnesses:', JSON.stringify(validatorWitnesses, null, 2));
     }
 
-    await this.verifier.verifyValidatorExitDelay(
-      beaconBlock,
-      validatorWitnesses,
-      exitRequestsData
-    );
+    await this.verifier.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequestsData);
 
     this.logger.log(
       `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
-      `\n  Verification time: ${Date.now() - verificationStartTime}ms`
+        `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
     );
   }
 
-  public async handleBlock(
-    fromBlock: number,
-    toBlock: number,
-  ): Promise<void> {
+  public async handleBlock(fromBlock: number, toBlock: number): Promise<void> {
     const startTime = Date.now();
     try {
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Starting block processing`);
@@ -305,17 +295,17 @@ export class ProverService {
         const requestStartTime = Date.now();
         this.logger.log(
           `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
-          `\n  Hash: ${exitRequest.exitRequestsHash}` +
-          `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`
+            `\n  Hash: ${exitRequest.exitRequestsHash}` +
+            `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
         );
 
         const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
         const deliveryTimestamp = await this.exitRequests.getDeliveryTimestamp(exitRequest.exitRequestsHash);
         this.logger.log(
           `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
-          `\n  Validators count: ${validators.length}` +
-          `\n  Delivery timestamp: ${deliveryTimestamp}` +
-          `\n  Processing time: ${Date.now() - requestStartTime}ms`
+            `\n  Validators count: ${validators.length}` +
+            `\n  Delivery timestamp: ${deliveryTimestamp}` +
+            `\n  Processing time: ${Date.now() - requestStartTime}ms`,
         );
 
         const groupingStartTime = Date.now();
@@ -324,36 +314,40 @@ export class ProverService {
           deliveryTimestamp,
           stateView,
           fromBlock,
-          toBlock
+          toBlock,
         );
 
         this.logger.log(
           `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
-          `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
-          `\n  Grouping time: ${Date.now() - groupingStartTime}ms`
+            `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
+            `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
         );
 
         let totalProcessedValidators = 0;
         let totalSkippedValidators = 0;
 
         for (const [deadlineSlot, validatorGroup] of validatorsByDeadlineSlot) {
-          const { validatorWitnesses, processedValidators, skippedValidators, deadlineStateView } = await this.processValidatorGroup(
-            validatorGroup,
-            deadlineSlot,
-            stateView,
-            deliveryTimestamp,
-            fromBlock,
-            toBlock
-          );
+          const { validatorWitnesses, processedValidators, skippedValidators, deadlineStateView } =
+            await this.processValidatorGroup(
+              validatorGroup,
+              deadlineSlot,
+              stateView,
+              deliveryTimestamp,
+              fromBlock,
+              toBlock,
+            );
 
-          const rootsTimestamp = deadlineStateView.genesisTime + Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) + deadlineStateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
-          this.logger.log(`Beacon block rootsTimestamp: ${rootsTimestamp}`)
+          const rootsTimestamp =
+            deadlineStateView.genesisTime +
+            Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
+            deadlineStateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
+          this.logger.log(`Beacon block rootsTimestamp: ${rootsTimestamp}`);
           totalProcessedValidators += processedValidators;
           totalSkippedValidators += skippedValidators;
 
           if (validatorWitnesses.length > 0) {
             const now = Math.floor(Date.now() / 1000); // current time in seconds
-            const twentySevenHoursAgo = now - (27 * 60 * 60);
+            const twentySevenHoursAgo = now - 27 * 60 * 60;
 
             const isYoungerThan27Hours = rootsTimestamp > twentySevenHoursAgo;
             if (isYoungerThan27Hours) {
@@ -372,17 +366,17 @@ export class ProverService {
                 beaconBlock,
                 exitRequest.exitRequestsData,
                 fromBlock,
-                toBlock
+                toBlock,
               );
             } else {
               const summaryIndex = this.calcSummaryIndex(deadlineSlot);
-              const rootIndex = this.calcRootIndexInSummary(deadlineSlot);
-              const [oldBlock, gI] = this.createHistoricalHeaderWitness(
+              const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
+              const [oldBlock, _] = this.createHistoricalHeaderWitness(
                 deadlineStateView.latestBlockHeader,
                 deadlineStateView,
                 stateView,
                 summaryIndex,
-                rootIndex,
+                rootIndexInSummary,
               );
               const beaconBlock = {
                 header: {
@@ -392,33 +386,41 @@ export class ProverService {
                   stateRoot: ethers.utils.hexlify(stateView.hashTreeRoot()),
                   bodyRoot: ethers.utils.hexlify(stateView.latestBlockHeader.bodyRoot),
                 },
-                rootsTimestamp: stateView.genesisTime + Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) + stateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT),
+                rootsTimestamp:
+                  stateView.genesisTime +
+                  Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
+                  stateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT),
               };
-              this.logger.log(`Verify historical proof locally`)
-              await this.verifier.verifyHistoricalValidatorExitDelay(beaconBlock, oldBlock, validatorWitnesses, exitRequest.exitRequestsData)
+              // this.logger.log(`Verify historical proof locally`)
+              await this.verifier.verifyHistoricalValidatorExitDelay(
+                beaconBlock,
+                oldBlock,
+                validatorWitnesses,
+                exitRequest.exitRequestsData,
+              );
             }
           }
         }
 
         this.logger.log(
           `[Blocks ${fromBlock}-${toBlock}] Exit request processing completed:` +
-          `\n  Total validators: ${validators.length}` +
-          `\n  Processed: ${totalProcessedValidators}` +
-          `\n  Skipped: ${totalSkippedValidators}` +
-          `\n  Total processing time: ${Date.now() - requestStartTime}ms`
+            `\n  Total validators: ${validators.length}` +
+            `\n  Processed: ${totalProcessedValidators}` +
+            `\n  Skipped: ${totalSkippedValidators}` +
+            `\n  Total processing time: ${Date.now() - requestStartTime}ms`,
         );
       }
 
       this.logger.log(
         `[Blocks ${fromBlock}-${toBlock}] Block processing completed:` +
-        `\n  Total processing time: ${Date.now() - startTime}ms`
+          `\n  Total processing time: ${Date.now() - startTime}ms`,
       );
     } catch (error) {
       this.logger.error(
         `[Blocks ${fromBlock}-${toBlock}] Processing failed:` +
-        `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
-        `\n  Total time: ${Date.now() - startTime}ms`,
-        this.serializeError(error)
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
+          `\n  Total time: ${Date.now() - startTime}ms`,
+        this.serializeError(error),
       );
       throw error;
     }
@@ -426,15 +428,22 @@ export class ProverService {
 
   private serializeError(err: unknown): string {
     if (err instanceof Error) {
-      return JSON.stringify({
-        name: err.name,
-        message: err.message,
-        stack: err.stack,
-        ...Object.getOwnPropertyNames(err).reduce((acc, key) => {
-          acc[key] = (err as any)[key];
-          return acc;
-        }, {} as Record<string, any>),
-      }, null, 2);
+      return JSON.stringify(
+        {
+          name: err.name,
+          message: err.message,
+          stack: err.stack,
+          ...Object.getOwnPropertyNames(err).reduce(
+            (acc, key) => {
+              acc[key] = (err as any)[key];
+              return acc;
+            },
+            {} as Record<string, any>,
+          ),
+        },
+        null,
+        2,
+      );
     } else {
       return JSON.stringify(err, null, 2);
     }
@@ -442,34 +451,46 @@ export class ProverService {
 
   private createHistoricalHeaderWitness(
     header: any,
-    summaryStateView: any,   // raw 8192‐leaf subtree
-    finalizedStateView: any, // full state w/ historicalSummaries
+    summaryStateView: any,
+    finalizedStateView: any,
     summaryIndex: number,
-    rootIndex:    number
+    rootIndex: number,
   ): [HistoricalHeaderWitness, bigint] {
-    // generate the exact same SingleProof
-    const proofObj = generateHistoricalStateProof(
-      finalizedStateView,
-      summaryStateView,
+    // Log input parameters
+    this.logger.debug('Creating historical header witness:', {
       summaryIndex,
-      rootIndex
-    );
-  
+      rootIndex,
+      headerSlot: header.slot,
+      finalizedStateSlot: finalizedStateView.slot,
+      summaryStateSlot: summaryStateView.slot,
+    });
+
+    // generate the exact same SingleProof
+    const proofObj = generateHistoricalStateProof(finalizedStateView, summaryStateView, summaryIndex, rootIndex);
+
     const gindex = proofObj.gindex;
-    const hexGindex = ethers.utils.hexZeroPad(ethers.utils.hexlify(gindex), 32);
-  
+    // Convert gindex to hex string, ensuring it's properly padded to bytes32 without modifying the value
+    const hexGindex = '0x' + gindex.toString(16).padStart(64, '0');
+
+    this.logger.debug('Generated proof details:', {
+      gindex: gindex.toString(),
+      hexGindex,
+      proofLength: proofObj.witnesses.length,
+      witnesses: proofObj.witnesses.map((w) => toHex(w)),
+    });
+
     const witness: HistoricalHeaderWitness = {
       header: {
-        slot:           Number(header.slot),
-        proposerIndex:  Number(header.proposerIndex),
-        parentRoot:     ethers.utils.hexlify(header.parentRoot),
-        stateRoot:      ethers.utils.hexlify(header.stateRoot),
-        bodyRoot:       ethers.utils.hexlify(header.bodyRoot),
+        slot: header.slot,
+        proposerIndex: header.proposerIndex,
+        parentRoot: ethers.utils.hexlify(header.parentRoot),
+        stateRoot: ethers.utils.hexlify(header.stateRoot),
+        bodyRoot: ethers.utils.hexlify(header.bodyRoot),
       },
       rootGIndex: hexGindex,
-      proof:      proofObj.witnesses,
+      proof: proofObj.witnesses.map((w) => ethers.utils.hexlify(w)),
     };
-  
+
     return [witness, gindex];
   }
 
@@ -490,10 +511,7 @@ export class ProverService {
       const validatorIndex = Number(validator.validatorIndex);
       const stateValidator = stateView.validators.getReadonly(validatorIndex);
       const activationEpoch = stateValidator.activationEpoch;
-      const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(
-        deliveryTimestamp,
-        activationEpoch,
-      );
+      const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveryTimestamp, activationEpoch);
       const withdrawableEpoch = stateValidator.withdrawableEpoch;
 
       const exitDeadlineThreshold = await this.nor.exitDeadlineThreshold(Number(validator.nodeOpId));
@@ -503,16 +521,16 @@ export class ProverService {
 
       this.logger.debug?.(
         `[Blocks ${fromBlock}-${toBlock}] Validator details:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}` +
-        `\n  Node Operator: ${validator.nodeOpId}` +
-        `\n  Module ID: ${validator.moduleId}` +
-        `\n  Activation epoch: ${activationEpoch}` +
-        `\n  Withdrawable epoch: ${withdrawableEpoch}` +
-        `\n  Exit deadline: ${exitDeadline}` +
-        `\n  Exit deadline slot: ${exitDeadlineSlot}` +
-        `\n  Exit deadline epoch: ${exitDeadlineEpoch}` +
-        `\n  Exit deadline threshold: ${exitDeadlineThreshold}`
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Node Operator: ${validator.nodeOpId}` +
+          `\n  Module ID: ${validator.moduleId}` +
+          `\n  Activation epoch: ${activationEpoch}` +
+          `\n  Withdrawable epoch: ${withdrawableEpoch}` +
+          `\n  Exit deadline: ${exitDeadline}` +
+          `\n  Exit deadline slot: ${exitDeadlineSlot}` +
+          `\n  Exit deadline epoch: ${exitDeadlineEpoch}` +
+          `\n  Exit deadline threshold: ${exitDeadlineThreshold}`,
       );
 
       if (!validatorsByDeadlineSlot.has(exitDeadlineSlot)) {
@@ -521,7 +539,7 @@ export class ProverService {
       validatorsByDeadlineSlot.get(exitDeadlineSlot)!.push({
         validator,
         activationEpoch,
-        exitDeadlineEpoch
+        exitDeadlineEpoch,
       });
     }
 
@@ -529,10 +547,10 @@ export class ProverService {
   }
 
   private decodeValidatorsData(encodedHex: string): {
-    moduleId: bigint,
-    nodeOpId: bigint,
-    validatorIndex: bigint,
-    validatorPubkey: string,
+    moduleId: bigint;
+    nodeOpId: bigint;
+    validatorIndex: bigint;
+    validatorPubkey: string;
   }[] {
     // Remove '0x' prefix if present
     if (encodedHex.startsWith('0x')) {
@@ -543,10 +561,10 @@ export class ProverService {
 
     const ENTRY_SIZE = 64;
     const entries: {
-      moduleId: bigint,
-      nodeOpId: bigint,
-      validatorIndex: bigint,
-      validatorPubkey: string,
+      moduleId: bigint;
+      nodeOpId: bigint;
+      validatorIndex: bigint;
+      validatorPubkey: string;
     }[] = [];
 
     for (let offset = 0; offset < data.length; offset += ENTRY_SIZE) {
@@ -572,12 +590,6 @@ export class ProverService {
     const capellaForkSlot = this.consensus.epochToSlot(Number(this.consensus.beaconConfig.CAPELLA_FORK_EPOCH));
     const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
     return Math.floor((slot - capellaForkSlot) / slotsPerHistoricalRoot);
-  }
-
-  private calcSlotOfSummary(summaryIndex: number): number {
-    const capellaForkSlot = this.consensus.epochToSlot(Number(this.consensus.beaconConfig.CAPELLA_FORK_EPOCH));
-    const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
-    return capellaForkSlot + (summaryIndex + 1) * slotsPerHistoricalRoot;
   }
 
   private calcRootIndexInSummary(slot: number): number {

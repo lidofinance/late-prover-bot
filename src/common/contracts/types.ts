@@ -21,7 +21,7 @@ export interface ProvableBeaconBlockHeader {
 export interface HistoricalHeaderWitness {
   header: BeaconBlockHeader;
   rootGIndex: string;
-  proof: Uint8Array[];
+  proof: string[];
 }
 
 export interface ValidatorWitness {

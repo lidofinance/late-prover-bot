@@ -73,6 +73,33 @@ export class VerifierContract {
     exitRequests: ExitRequestsData
   ): Promise<ethers.ContractTransaction> {
     try {
+      this.logger.debug('Calling verifyHistoricalValidatorExitDelay with:', {
+        beaconBlock: {
+          header: {
+            slot: beaconBlock.header.slot,
+            proposerIndex: beaconBlock.header.proposerIndex,
+            parentRoot: beaconBlock.header.parentRoot,
+            stateRoot: beaconBlock.header.stateRoot,
+            bodyRoot: beaconBlock.header.bodyRoot
+          },
+          rootsTimestamp: beaconBlock.rootsTimestamp
+        },
+        oldBlock: {
+          header: {
+            slot: oldBlock.header.slot,
+            proposerIndex: oldBlock.header.proposerIndex,
+            parentRoot: oldBlock.header.parentRoot,
+            stateRoot: oldBlock.header.stateRoot,
+            bodyRoot: oldBlock.header.bodyRoot
+          },
+          rootGIndex: oldBlock.rootGIndex,
+          proofLength: oldBlock.proof.length,
+          proof: oldBlock.proof
+        },
+        validatorWitnessesCount: validatorWitnesses.length,
+        exitRequestsDataFormat: exitRequests.dataFormat
+      });
+
       await this.contractWithSigner.callStatic.verifyHistoricalValidatorExitDelay(
         beaconBlock,
         oldBlock,

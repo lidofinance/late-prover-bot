@@ -83,12 +83,7 @@ export class ExitRequestsContract {
           const decodedData = this.contract.interface.decodeFunctionData('submitReportData', tx.data);
 
           // Log the decoded data to inspect its structure
-          this.logger.debug('Decoded Data:', decodedData);
-
           const reportData = decodedData.data as ReportData;
-
-          // Log individual fields before converting to BigNumber
-          this.logger.debug('Report Data:', reportData);
 
           const exitRequestsData: ExitRequestsData = {
             data: reportData.data,
