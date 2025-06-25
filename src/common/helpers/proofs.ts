@@ -176,118 +176,22 @@ export function generateHistoricalStateProof(
   summaryIndex: number,
   rootIndex: number,
 ): SingleProof {
-  // Get the path to the historical summary root
-  const historicalSummaryPath = finalizedStateView.type.getPathInfo([
+  // NOTE: ugly hack to replace root with the value to make a proof
+  const patchedTree = new Tree(finalizedStateView.node);
+  const blockSummaryRootGI = finalizedStateView.type.getPathInfo([
     'historicalSummaries',
     summaryIndex,
     'blockSummaryRoot',
-  ]);
-
-  // Get the path to the specific block root within the summary
-  const blockRootPath = summaryStateView.blockRoots.type.getPathInfo([rootIndex]);
-
-  // Create a patched tree with the block roots from the summary state
-  const patchedTree = new Tree(finalizedStateView.node);
-  patchedTree.setNode(historicalSummaryPath.gindex, summaryStateView.blockRoots.node);
-
-  // Calculate the combined gindex
-  const historicalGI = BigInt(historicalSummaryPath.gindex);
-  const blockRootGI = BigInt(blockRootPath.gindex);
-
-  // Count significant bits (excluding leading 1)
-  const countSignificantBits = (n: bigint): number => {
-    const binary = n.toString(2);
-    // Remove leading 1 and count remaining bits
-    return binary.length - 1;
-  };
-
-  const historicalBits = countSignificantBits(historicalGI);
-  const blockRootBits = countSignificantBits(blockRootGI);
-
-  console.log('Gindex components:', {
-    historicalGI: historicalGI.toString(16),
-    blockRootGI: blockRootGI.toString(16),
-    historicalBits,
-    blockRootBits,
-    historicalBinary: historicalGI.toString(2),
-    blockRootBinary: blockRootGI.toString(2),
-  });
-
-  // Validate the gindices
-  validateGindex(historicalGI, 'historical gindex');
-  validateGindex(blockRootGI, 'block root gindex');
-
-  // Calculate the combined gindex
-  const gI = concatGindices([historicalGI, blockRootGI]);
-  const gIBits = countSignificantBits(gI);
-
-  // The number of witnesses should be equal to the number of significant bits
-  const expectedWitnesses = gIBits;
-
-  console.log('Final gindex:', {
-    gI: gI.toString(16),
-    gIBinary: gI.toString(2),
-    gIBits,
-    expectedWitnesses,
-    historicalGI: historicalGI.toString(16),
-    blockRootGI: blockRootGI.toString(16),
-  });
-
-  // Create proof from the patched tree
+  ]).gindex;
+  patchedTree.setNode(blockSummaryRootGI, summaryStateView.blockRoots.node);
+  const blockRootsGI = summaryStateView.blockRoots.type.getPropertyGindex(rootIndex) as bigint;
+  const gI = concatGindices([blockSummaryRootGI, blockRootsGI]);
   const proof = createProof(patchedTree.rootNode, {
     type: ProofType.single,
     gindex: gI,
   }) as SingleProof;
-
-  // Verify that we have the correct number of witnesses
-  if (proof.witnesses.length !== expectedWitnesses) {
-    throw new Error(
-      `Witness count mismatch: expected ${expectedWitnesses} but got ${proof.witnesses.length}\n` +
-      `Gindex binary (${gIBits} bits): ${gI.toString(2)}\n` +
-      `Historical gindex (${historicalBits} bits): ${historicalGI.toString(2)}\n` +
-      `Block root gindex (${blockRootBits} bits): ${blockRootGI.toString(2)}`
-    );
-  }
-
-  // Verify each witness is a valid 32-byte value
-  proof.witnesses.forEach((witness, index) => {
-    if (witness.length !== 32) {
-      throw new Error(
-        `Invalid witness at index ${index}: length ${witness.length} (expected 32)\n` +
-        `Witness: ${toHex(witness)}`
-      );
-    }
-  });
-
-  // Log the proof details
-  console.log('Generated proof details: ', {
-    gindex: gI.toString(),
-    hexGindex: '0x' + gI.toString(16).padStart(64, '0'),
-    proofLength: proof.witnesses.length,
-    expectedWitnesses,
-    witnesses: proof.witnesses.map(w => toHex(w))
-  });
-
-  // Verify the proof locally before returning
-  try {
-    const value = summaryStateView.blockRoots.getReadonly(rootIndex);
-    verifyProof(patchedTree.rootNode.root, gI, proof.witnesses, value);
-    console.log('Local proof verification succeeded');
-  } catch (error) {
-    console.error('Local proof verification failed:', error);
-    if (error instanceof Error) {
-      console.error('Error details:', {
-        message: error.message,
-        gindexBits: gI.toString(2),
-        proofLength: proof.witnesses.length,
-        expectedWitnesses,
-        historicalBits,
-        blockRootBits,
-      });
-    }
-    throw error;
-  }
-
+  const value = summaryStateView.blockRoots.getReadonly(rootIndex);
+  verifyProof(finalizedStateView.hashTreeRoot(), gI, proof.witnesses, value);
   return proof;
 }
 

@@ -117,12 +117,14 @@ export class VerifierContract {
       return tx;
     } catch (error) {
       const data: string = error.data as string;  // "0x5849603f…"
-      try {
-        // parseError will match that 4-byte selector to one of the custom errors in your ABI
-        const parsed = this.contract.parseError(data);
-        this.logger.error("Contract reverted with:", parsed.name, parsed.args);
-      } catch (parseErr) {
-        this.logger.error("Unknown selector:", data.slice(0, 10));
+      if (data) {
+        try {
+          // parseError will match that 4-byte selector to one of the custom errors in your ABI
+          const parsed = this.contract.parseError(data);
+          this.logger.error("Contract reverted with:", parsed.name, parsed.args);
+        } catch (parseErr) {
+          this.logger.error("Unknown selector:", data.slice(0, 10));
+        }
       }
       this.logger.error('Error in verifyHistoricalValidatorExitDelay:', error.reason || error.message);
       throw error;

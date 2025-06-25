@@ -1,3 +1,4 @@
+import { SingleProof } from '@chainsafe/persistent-merkle-tree';
 import type { ssz as sszType } from '@lodestar/types';
 import { Injectable, Logger } from '@nestjs/common';
 import { ethers } from 'ethers';
@@ -102,9 +103,7 @@ export class ProverService {
       };
     }
 
-    const rootsTimestamp =
-      this.consensus.genesisTimestamp +
-      Number(deadlineStateView.latestBlockHeader.slot) * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
+    const rootsTimestamp = this.calcRootsTimestamp(deadlineStateView.latestBlockHeader.slot);
 
     const validatorWitnesses: ValidatorWitness[] = [];
     let processedValidators = 0;
@@ -275,20 +274,17 @@ export class ProverService {
     const startTime = Date.now();
     try {
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Starting block processing`);
-
       const exitRequestsResult = await this.exitRequests.getExitRequestsFromBlock(fromBlock, toBlock);
-
       if (!exitRequestsResult) {
         this.logger.log(`[Blocks ${fromBlock}-${toBlock}] No exit requests found`);
         return;
       }
 
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Found ${exitRequestsResult.length} exit requests events`);
-
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
       const state = await this.consensus.getState('finalized');
       ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-      const stateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+      const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
 
       for (const exitRequest of exitRequestsResult) {
@@ -312,7 +308,7 @@ export class ProverService {
         const validatorsByDeadlineSlot = await this.groupValidatorsByDeadlineSlot(
           validators,
           deliveryTimestamp,
-          stateView,
+          finalizedStateView,
           fromBlock,
           toBlock,
         );
@@ -331,17 +327,14 @@ export class ProverService {
             await this.processValidatorGroup(
               validatorGroup,
               deadlineSlot,
-              stateView,
+              finalizedStateView,
               deliveryTimestamp,
               fromBlock,
               toBlock,
             );
 
-          const rootsTimestamp =
-            deadlineStateView.genesisTime +
-            Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
-            deadlineStateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT);
-          this.logger.log(`Beacon block rootsTimestamp: ${rootsTimestamp}`);
+          const deadlineRootsTimestamp = this.calcRootsTimestamp(deadlineStateView.latestBlockHeader.slot);
+          this.logger.log(`Beacon block deadlineRootsTimestamp: ${deadlineRootsTimestamp}`);
           totalProcessedValidators += processedValidators;
           totalSkippedValidators += skippedValidators;
 
@@ -349,7 +342,7 @@ export class ProverService {
             const now = Math.floor(Date.now() / 1000); // current time in seconds
             const twentySevenHoursAgo = now - 27 * 60 * 60;
 
-            const isYoungerThan27Hours = rootsTimestamp > twentySevenHoursAgo;
+            const isYoungerThan27Hours = deadlineRootsTimestamp > twentySevenHoursAgo;
             if (isYoungerThan27Hours) {
               const beaconBlock = {
                 header: {
@@ -359,7 +352,7 @@ export class ProverService {
                   stateRoot: ethers.utils.hexlify(deadlineStateView.latestBlockHeader.stateRoot),
                   bodyRoot: ethers.utils.hexlify(deadlineStateView.latestBlockHeader.bodyRoot),
                 },
-                rootsTimestamp: rootsTimestamp,
+                rootsTimestamp: deadlineRootsTimestamp,
               };
               await this.verifyValidatorGroup(
                 validatorWitnesses,
@@ -371,27 +364,24 @@ export class ProverService {
             } else {
               const summaryIndex = this.calcSummaryIndex(deadlineSlot);
               const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
-              const [oldBlock, _] = this.createHistoricalHeaderWitness(
-                deadlineStateView.latestBlockHeader,
+              const proof = generateHistoricalStateProof(
+                finalizedStateView,
                 deadlineStateView,
-                stateView,
                 summaryIndex,
                 rootIndexInSummary,
               );
+              const oldBlock = this.createHistoricalHeaderWitness(deadlineStateView.latestBlockHeader, proof);
+              const finalizedRootsTimestamp = this.calcRootsTimestamp(finalizedStateView.latestBlockHeader.slot);
               const beaconBlock = {
                 header: {
-                  slot: stateView.latestBlockHeader.slot,
-                  proposerIndex: stateView.latestBlockHeader.proposerIndex,
-                  parentRoot: ethers.utils.hexlify(stateView.latestBlockHeader.parentRoot),
-                  stateRoot: ethers.utils.hexlify(stateView.hashTreeRoot()),
-                  bodyRoot: ethers.utils.hexlify(stateView.latestBlockHeader.bodyRoot),
+                  slot: finalizedStateView.latestBlockHeader.slot,
+                  proposerIndex: finalizedStateView.latestBlockHeader.proposerIndex,
+                  parentRoot: ethers.utils.hexlify(finalizedStateView.latestBlockHeader.parentRoot),
+                  stateRoot: ethers.utils.hexlify(finalizedStateView.hashTreeRoot()),
+                  bodyRoot: ethers.utils.hexlify(finalizedStateView.latestBlockHeader.bodyRoot),
                 },
-                rootsTimestamp:
-                  stateView.genesisTime +
-                  Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
-                  stateView.latestBlockHeader.slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT),
+                rootsTimestamp: finalizedRootsTimestamp,
               };
-              // this.logger.log(`Verify historical proof locally`)
               await this.verifier.verifyHistoricalValidatorExitDelay(
                 beaconBlock,
                 oldBlock,
@@ -449,37 +439,19 @@ export class ProverService {
     }
   }
 
-  private createHistoricalHeaderWitness(
-    header: any,
-    summaryStateView: any,
-    finalizedStateView: any,
-    summaryIndex: number,
-    rootIndex: number,
-  ): [HistoricalHeaderWitness, bigint] {
-    // Log input parameters
-    this.logger.debug('Creating historical header witness:', {
-      summaryIndex,
-      rootIndex,
-      headerSlot: header.slot,
-      finalizedStateSlot: finalizedStateView.slot,
-      summaryStateSlot: summaryStateView.slot,
-    });
-
-    // generate the exact same SingleProof
-    const proofObj = generateHistoricalStateProof(finalizedStateView, summaryStateView, summaryIndex, rootIndex);
-
-    const gindex = proofObj.gindex;
+  private createHistoricalHeaderWitness(header: any, proof: SingleProof): HistoricalHeaderWitness {
+    const gindex = proof.gindex;
     // Convert gindex to hex string, ensuring it's properly padded to bytes32 without modifying the value
     const hexGindex = '0x' + gindex.toString(16).padStart(64, '0');
 
     this.logger.debug('Generated proof details:', {
       gindex: gindex.toString(),
       hexGindex,
-      proofLength: proofObj.witnesses.length,
-      witnesses: proofObj.witnesses.map((w) => toHex(w)),
+      proofLength: proof.witnesses.length,
+      witnesses: proof.witnesses.map((w) => toHex(w)),
     });
 
-    const witness: HistoricalHeaderWitness = {
+    return {
       header: {
         slot: header.slot,
         proposerIndex: header.proposerIndex,
@@ -488,10 +460,8 @@ export class ProverService {
         bodyRoot: ethers.utils.hexlify(header.bodyRoot),
       },
       rootGIndex: hexGindex,
-      proof: proofObj.witnesses.map((w) => ethers.utils.hexlify(w)),
+      proof: proof.witnesses.map(toHex),
     };
-
-    return [witness, gindex];
   }
 
   private async groupValidatorsByDeadlineSlot(
@@ -499,13 +469,25 @@ export class ProverService {
     deliveryTimestamp: number,
     stateView: any,
     fromBlock: number,
-    toBlock: number
-  ): Promise<Map<number, { validator: ReturnType<typeof this.decodeValidatorsData>[0], activationEpoch: number, exitDeadlineEpoch: number }[]>> {
-    const validatorsByDeadlineSlot = new Map<number, {
-      validator: ReturnType<typeof this.decodeValidatorsData>[0],
-      activationEpoch: number,
-      exitDeadlineEpoch: number
-    }[]>();
+    toBlock: number,
+  ): Promise<
+    Map<
+      number,
+      {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[]
+    >
+  > {
+    const validatorsByDeadlineSlot = new Map<
+      number,
+      {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[]
+    >();
 
     for (const validator of validators) {
       const validatorIndex = Number(validator.validatorIndex);
@@ -595,5 +577,13 @@ export class ProverService {
   private calcRootIndexInSummary(slot: number): number {
     const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
     return slot % slotsPerHistoricalRoot;
+  }
+
+  private calcRootsTimestamp(slot: number): number {
+    return (
+      this.consensus.genesisTimestamp +
+      Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
+      slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)
+    );
   }
 }
