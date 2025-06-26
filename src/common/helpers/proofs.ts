@@ -21,84 +21,6 @@ export function generateValidatorProof(stateView: SupportedStateView, valIndex: 
   return createProof(stateView.node, { type: ProofType.single, gindex: gI }) as SingleProof;
 }
 
-export function generateWithdrawalProof(
-  stateView: SupportedStateView,
-  blockView: SupportedBlockView,
-  withdrawalOffset: number,
-): SingleProof {
-  // NOTE: ugly hack to replace root with the value to make a proof
-  const patchedTree = new Tree(stateView.node);
-  const stateWdGindex = stateView.type.getPathInfo(['latestExecutionPayloadHeader', 'withdrawalsRoot']).gindex;
-  patchedTree.setNode(stateWdGindex, blockView.body.executionPayload.withdrawals.node);
-  const withdrawalGI = blockView.body.executionPayload.withdrawals.type.getPropertyGindex(withdrawalOffset) as bigint;
-  const gI = concatGindices([stateWdGindex, withdrawalGI]);
-  return createProof(patchedTree.rootNode, {
-    type: ProofType.single,
-    gindex: gI,
-  }) as SingleProof;
-}
-
-/**
- * Validates that a gindex is well-formed and represents a valid path in a binary tree.
- * A valid gindex must:
- * 1. Be greater than 1 (1 is the root)
- * 2. Have a leading 1 bit
- * 3. Have the correct number of bits for its position in the tree
- */
-function validateGindex(gindex: bigint, description: string): void {
-  if (gindex <= 1n) {
-    throw new Error(`Invalid ${description}: must be > 1`);
-  }
-
-  const binary = gindex.toString(2);
-  if (!binary.startsWith('1')) {
-    throw new Error(`Invalid ${description}: must start with 1`);
-  }
-
-  // The number of bits (including leading 1) should match the path length
-  const expectedBits = binary.length;
-  const actualBits = gindex.toString(2).length;
-  if (actualBits !== expectedBits) {
-    throw new Error(`Invalid ${description}: bit length mismatch (expected ${expectedBits}, got ${actualBits})`);
-  }
-}
-
-/**
- * Concatenates two gindices while ensuring proper bit handling.
- * The resulting gindex will have the correct number of bits for the combined path.
- */
-function concatGindicesWithValidation(gindexA: bigint, gindexB: bigint): bigint {
-  // Get binary representations (including leading 1)
-  const binaryA = gindexA.toString(2);
-  const binaryB = gindexB.toString(2);
-
-  // Calculate bit lengths (excluding leading 1)
-  const bitsA = binaryA.length - 1;
-  const bitsB = binaryB.length - 1;
-
-  // The new gindex should have bitsA + bitsB significant bits
-  const expectedBits = bitsA + bitsB;
-
-  // Use library's concatGindices
-  const result = concatGindices([gindexA, gindexB]);
-
-  // Validate the result
-  const resultBinary = result.toString(2);
-  const actualBits = resultBinary.length - 1;
-
-  if (actualBits !== expectedBits) {
-    throw new Error(
-      `Gindex concatenation produced invalid result: ` +
-      `expected ${expectedBits} bits but got ${actualBits} bits\n` +
-      `Input A (${bitsA} bits): ${binaryA}\n` +
-      `Input B (${bitsB} bits): ${binaryB}\n` +
-      `Result (${actualBits} bits): ${resultBinary}`
-    );
-  }
-
-  return result;
-}
-
 /**
  * generateHistoricalStateProof
  *
@@ -197,6 +119,13 @@ export function generateHistoricalStateProof(
 
 // port of https://github.com/ethereum/go-ethereum/blob/master/beacon/merkle/merkle.go
 export function verifyProof(root: Uint8Array, gI: bigint, proof: Uint8Array[], value: Uint8Array) {
+  console.log('Local verification parameters:', {
+    root: toHex(root),
+    gindex: gI.toString(16),
+    proofLength: proof.length,
+    proof: proof.map(p => toHex(p)),
+    value: toHex(value)
+  });
   let buf = value;
 
   proof.forEach((p) => {
