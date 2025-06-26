@@ -1,15 +1,10 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 
-import { RootSlot, RootsStack } from './roots-stack';
 import { ConfigService } from '../../common/config/config.service';
-import { Consensus } from '../../common/providers/consensus/consensus';
-import { BlockHeaderResponse, RootHex } from '../../common/providers/consensus/response.interface';
-
-interface BeaconHeaders {
-  data: BlockHeaderResponse[];
-  finalized: boolean;
-}
+import { Consensus } from "../../common/providers/consensus/consensus";
+import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
+import { LastProcessedRoot } from './last-processed-root';
 
 @Injectable()
 export class RootsProvider {
@@ -17,94 +12,80 @@ export class RootsProvider {
     @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
     protected readonly config: ConfigService,
     protected readonly consensus: Consensus,
-    protected readonly rootsStack: RootsStack,
+    protected readonly lastProcessedRoot: LastProcessedRoot,
   ) {}
 
   /**
-   * Returns the next root to process in the following order:
-   * 1. Any unprocessed roots from the stack
-   * 2. Initial root (configured or finalized)
-   * 3. Child of the last processed root
+   * Get both PREV and LATEST roots.
+   * PREV is initialized from:
+   * 1. Last processed root from file
+   * 2. Fallback to START_ROOT from env
+   * 3. Fallback to parent of finalized root
    * 
-   * Returns undefined if:
-   * - Failed to get finalized header
-   * - Last processed root matches finalized root
-   * - No next root found in the processing chain
+   * LATEST is always the finalized root.
+   * 
+   * Returns undefined if failed to get finalized header.
    */
-  public async getNext(): Promise<BlockHeaderResponse | undefined> {
-    this.logger.log('Get previous processed header');
-    // Get finalized header first as it's needed for validation
+  public async getRoots(): Promise<{ prev: BlockHeaderResponse; latest: BlockHeaderResponse } | undefined> {
+    // Get finalized header first as we need it for both PREV and LATEST
     const finalized = await this.consensus.getBeaconHeader('finalized');
     if (!finalized) {
       this.logger.warn('Failed to get finalized header');
       return undefined;
     }
 
-    // Check if we're already at the finalized root
-    const lastProcessed = this.rootsStack.getLastProcessed();
-    if (lastProcessed?.blockRoot === finalized.root) {
-      this.logger.log(`Already at finalized root [${finalized.root}]`);
+    // Get PREV root
+    const prev = await this.getPrevRoot(finalized);
+    if (!prev) {
+      this.logger.warn('Failed to get previous root');
       return undefined;
     }
+    
+    this.logger.debug?.('Roots:', {
+      prev: prev.root,
+      latest: finalized.root,
+      prevSlot: prev.header.message.slot,
+      latestSlot: finalized.header.message.slot
+    });
 
-    // Try processing chain
-    return this.processNextRoot(finalized);
+    return {
+      prev,
+      latest: finalized
+    };
   }
 
-  private async processNextRoot(finalized: BlockHeaderResponse): Promise<BlockHeaderResponse | undefined> {
-    // Try to get from stack first
-    const fromStack = await this.getStackedRoot();
-    if (fromStack) return fromStack;
-
-    // If no last processed root, try initial root with finalized fallback
-    const lastProcessed = this.rootsStack.getLastProcessed();
-    if (!lastProcessed) {
-      const initial = await this.getInitialRoot();
-      return initial ?? finalized;
+  private async getPrevRoot(finalized: BlockHeaderResponse): Promise<BlockHeaderResponse | undefined> {
+    // 1. Try to get last processed root from file
+    const lastProcessed = await this.lastProcessedRoot.get();
+    if (lastProcessed) {
+      const header = await this.consensus.getBeaconHeader(lastProcessed.root);
+      if (header) {
+        this.logger.log(`Using last processed root [${lastProcessed.root}]`);
+        return header;
+      }
     }
 
-    // Try to get child of last processed
-    const childRoot = await this.tryGetChildRoot(lastProcessed);
-    return childRoot ?? finalized;
-  }
-
-  private async getStackedRoot(): Promise<BlockHeaderResponse | undefined> {
-    const stacked = this.rootsStack.getNextEligible();
-    if (!stacked) {
-      return undefined;
+    // 2. Try to get START_ROOT from env
+    const startRoot = this.config.get('START_ROOT');
+    if (startRoot) {
+      const header = await this.consensus.getBeaconHeader(startRoot);
+      if (header) {
+        this.logger.log(`Using START_ROOT [${startRoot}]`);
+        return header;
+      }
     }
 
-    this.logger.warn(
-      `⏭️ Next root to process [${stacked.blockRoot}]. Taken from 📚 stack of unprocessed roots`
-    );
-    return this.consensus.getBeaconHeader(stacked.slotNumber);
-  }
-
-  private async getInitialRoot(): Promise<BlockHeaderResponse | undefined> {
-    const configuredRoot = this.config.get('START_ROOT');
-    if (!configuredRoot) {
-      return undefined;
+    // 3. Fallback to parent of finalized root
+    const parentRoot = finalized.header.message.parent_root;
+    if (parentRoot) {
+      const header = await this.consensus.getBeaconHeader(parentRoot);
+      if (header) {
+        this.logger.log(`Using parent of finalized root [${parentRoot}]`);
+        return header;
+      }
     }
 
-    this.logger.log(`No processed roots. Start from ⚙️ configured root [${configuredRoot}]`);
-    return this.consensus.getBeaconHeader(configuredRoot);
-  }
-
-  private async tryGetChildRoot(
-    lastProcessed: RootSlot,
-  ): Promise<BlockHeaderResponse | undefined> {
-    const childHeaders = await this.consensus.getBeaconHeadersByParentRoot(lastProcessed.blockRoot);
-    if (!this.isValidChildHeader(childHeaders)) {
-      this.logger.warn(`No finalized child header for [${lastProcessed.blockRoot}] yet`);
-      return undefined;
-    }
-
-    const childRoot = childHeaders.data[0].root;
-    this.logger.log(`⏭️ Next root to process [${childRoot}]. Child of last processed`);
-    return this.consensus.getBeaconHeader(childRoot);
-  }
-
-  private isValidChildHeader(childHeaders: BeaconHeaders): boolean {
-    return childHeaders.data.length > 0 && childHeaders.finalized;
+    this.logger.warn('Failed to get parent of finalized root');
+    return undefined;
   }
 }

@@ -14,7 +14,7 @@ async function bootstrapDaemon() {
   daemonApp.useLogger(daemonApp.get(LOGGER_PROVIDER));
   const configService: ConfigService = daemonApp.get(ConfigService);
   await daemonApp.listen(configService.get('HTTP_PORT'), '0.0.0.0');
-  daemonApp.get(DaemonService).loop().then();
+  daemonApp.get(DaemonService).run().then();
 }
 
 async function bootstrap() {

@@ -32,23 +32,32 @@ export class DaemonService implements OnModuleInit {
     this.prometheus.buildInfo.labels({ env, name, version, commit, branch }).inc();
   }
 
-  public async loop() {
+  public async run() {
     while (true) {
       try {
         await this.baseRun();
-      } catch (e) {
-        this.logger.error(e);
+      } catch (error) {
+        this.logger.error('Error in daemon loop', error);
+        await sleep(12000);
       }
     }
   }
 
   private async baseRun() {
-    const prevHeader = await this.rootsProvider.getNext();
-    if (prevHeader) {
-      await this.rootsProcessor.process(prevHeader);
+    const roots = await this.rootsProvider.getRoots();
+    if (!roots) {
+      this.logger.log(`💤 Wait for the next finalized root`);
+      await sleep(12000);
       return;
     }
-    this.logger.log(`💤 Wait for the next finalized root`);
-    await sleep(12000);
+
+    // If PREV and LATEST are the same, we're caught up
+    if (roots.prev.root === roots.latest.root) {
+      this.logger.log(`Already at latest root [${roots.latest.root}]`);
+      await sleep(12000);
+      return;
+    }
+
+    await this.rootsProcessor.process(roots.prev, roots.latest);
   }
 }

@@ -66,30 +66,31 @@ export class VerifierContract {
     exitRequests: ExitRequestsData,
   ): Promise<ethers.ContractTransaction> {
     try {
-      const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-      
-      // Convert hex strings to Uint8Arrays
-      const parentRoot = ethers.utils.arrayify(oldBlock.header.parentRoot);
-      const stateRoot = ethers.utils.arrayify(oldBlock.header.stateRoot);
-      const bodyRoot = ethers.utils.arrayify(oldBlock.header.bodyRoot);
-      
-      // Create a BeaconBlockHeader view and get its hashTreeRoot
-      const headerView = ssz.phase0.BeaconBlockHeader.toView({
-        slot: oldBlock.header.slot,
-        proposerIndex: oldBlock.header.proposerIndex,
-        parentRoot: parentRoot,
-        stateRoot: stateRoot,
-        bodyRoot: bodyRoot,
-      });
-      
-      const headerRoot = ethers.utils.hexlify(headerView.hashTreeRoot());
-
-      this.logger.debug('Contract verification parameters:', {
-        stateRoot: beaconBlock.header.stateRoot,
-        leaf: headerRoot,
-        gindex: oldBlock.rootGIndex,
-        proofLength: oldBlock.proof.length,
-        proof: oldBlock.proof,
+      this.logger.debug('Calling verifyHistoricalValidatorExitDelay with:', {
+        beaconBlock: {
+          header: {
+            slot: beaconBlock.header.slot,
+            proposerIndex: beaconBlock.header.proposerIndex,
+            parentRoot: beaconBlock.header.parentRoot,
+            stateRoot: beaconBlock.header.stateRoot,
+            bodyRoot: beaconBlock.header.bodyRoot,
+          },
+          rootsTimestamp: beaconBlock.rootsTimestamp,
+        },
+        oldBlock: {
+          header: {
+            slot: oldBlock.header.slot,
+            proposerIndex: oldBlock.header.proposerIndex,
+            parentRoot: oldBlock.header.parentRoot,
+            stateRoot: oldBlock.header.stateRoot,
+            bodyRoot: oldBlock.header.bodyRoot,
+          },
+          rootGIndex: oldBlock.rootGIndex,
+          proofLength: oldBlock.proof.length,
+          proof: oldBlock.proof,
+        },
+        validatorWitnessesCount: validatorWitnesses.length,
+        exitRequestsDataFormat: exitRequests.dataFormat,
       });
 
       await this.contractWithSigner.callStatic.verifyHistoricalValidatorExitDelay(

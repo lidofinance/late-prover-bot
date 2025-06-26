@@ -1,19 +1,15 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
+import { hexlify } from 'ethers/lib/utils';
+import { SimpleFallbackJsonRpcBatchProvider } from '@lido-nestjs/execution';
 
-import { RootSlot, RootsStack } from './roots-stack';
+import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
 import { ProverService } from '../../common/prover/prover.service';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
-import { hexlify } from 'ethers/lib/utils';
-import { SimpleFallbackJsonRpcBatchProvider } from '@lido-nestjs/execution';
+import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
 
-interface BlockProcessingResult {
-  success: boolean;
-  error?: Error;
-  rootSlot: RootSlot;
-}
 
 @Injectable()
 export class RootsProcessor {
@@ -21,33 +17,34 @@ export class RootsProcessor {
     @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
     protected readonly prometheus: PrometheusService,
     protected readonly consensus: Consensus,
-    protected readonly rootsStack: RootsStack,
+    protected readonly lastProcessedRoot: LastProcessedRoot,
     protected readonly prover: ProverService,
     public readonly provider: SimpleFallbackJsonRpcBatchProvider,
+    protected readonly exitRequests: ExitRequestsContract,
   ) { }
 
   /**
-   * Process a block root and handle any associated validator exits
-   * @param blockRootToProcess - The root of the block to process
-   * @param finalizedHeader - The current finalized header
+   * Process roots from PREV to LATEST.
+   * This will:
+   * 1. Process the PREV root
+   * 2. Store it as last processed root
+   * 
+   * Note: We only process one root at a time to ensure proper ordering
+   * and to avoid processing too many roots at once.
    */
-  @TrackTask('process-root')
-  public async process(header: BlockHeaderResponse): Promise<void> {
+  public async process(prev: BlockHeaderResponse, latest: BlockHeaderResponse): Promise<void> {
+    this.logger.log(`Processing root [${prev.root}] at slot [${prev.header.message.slot}]`);
+
     try {
-      const finalizedHeader = await this.consensus.getBeaconHeader('finalized');
-      this.logger.log(`🛃 Starting to process root [${header.root} ::: ${finalizedHeader.root}]`);
+      await this.processBlockRoot(prev, latest);
 
-      const result = await this.processBlockRoot(header, finalizedHeader);
-
-      if (!result.success) {
-        this.logger.error(`Failed to process root [${header.root}]`, result.error?.message);
-        return;
-      }
-
-      await this.handleProcessingResult(result.rootSlot);
-
+      // Store the processed root
+      await this.handleProcessingResult({
+        root: latest.root,
+        slot: Number(latest.header.message.slot),
+      });
     } catch (error) {
-      this.logger.error(`Unexpected error processing root [${header.root}]`, error);
+      this.logger.error(`Failed to process root [${prev.root}]`, error);
       throw error;
     }
   }
@@ -58,90 +55,35 @@ export class RootsProcessor {
   private async processBlockRoot(
     prevHeader: BlockHeaderResponse,
     finalizedHeader: BlockHeaderResponse,
-  ): Promise<BlockProcessingResult> {
-    try {
-      // CL blocks handling
-      const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
-      const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
-      const rootSlot: RootSlot = {
-        blockRoot: finalizedHeader.root,
-        slotNumber: finalizedBlock.slot,
-      };
-      const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash)
-      const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash)
-      // EL blocks handling
-      const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number
-      const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number
-      // Add to stack first in case we need to reprocess
-      // todo: stack handling seems incorrect
-      await this.addToProcessingStack(rootSlot);
+  ): Promise<void> {
+    // CL blocks handling
+    const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
+    const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
+    const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash)
+    const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash)
 
-      // Process the block
-      await this.prover.handleBlock(prevBlockNumber, finalizedBlockNumber);
+    // EL blocks handling
+    const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number
+    const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number
 
-      return { success: true, rootSlot };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error : new Error(String(error)),
-        rootSlot: { blockRoot: finalizedHeader.root, slotNumber: 0 },
-      };
-    }
+    // Process the block
+    await this.prover.handleBlock(prevBlockNumber, finalizedBlockNumber);
   }
 
   /**
-   * Handle the result of block processing, including stack management
+   * Handle the result of block processing
    */
-  private async handleProcessingResult(rootSlot: RootSlot): Promise<void> {
+  private async handleProcessingResult(processedRoot: ProcessedRoot): Promise<void> {
     try {
-      await this.updateLastProcessed(rootSlot);
+      await this.lastProcessedRoot.set(processedRoot);
 
       this.logger.log(
-        `✅ Successfully processed root [${rootSlot.blockRoot}] at slot [${rootSlot.slotNumber}]`
+        `✅ Successfully processed root [${processedRoot.root}] at slot [${processedRoot.slot}]`
       );
 
     } catch (error) {
       this.logger.error(
-        `Failed to handle processing result for root [${rootSlot.blockRoot}]`,
-        error
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Add a root to the processing stack
-   */
-  private async addToProcessingStack(rootSlot: RootSlot): Promise<void> {
-    try {
-      await this.rootsStack.push(rootSlot);
-    } catch (error) {
-      this.logger.error(`Failed to add root [${rootSlot.blockRoot}] to stack`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Remove a root from the processing stack
-   */
-  private async purgeFromStack(rootSlot: RootSlot): Promise<void> {
-    try {
-      await this.rootsStack.purge(rootSlot);
-    } catch (error) {
-      this.logger.error(`Failed to purge root [${rootSlot.blockRoot}] from stack`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Update the last processed root
-   */
-  private async updateLastProcessed(rootSlot: RootSlot): Promise<void> {
-    try {
-      await this.rootsStack.setLastProcessed(rootSlot);
-    } catch (error) {
-      this.logger.error(
-        `Failed to update last processed root [${rootSlot.blockRoot}]`,
+        `Failed to handle processing result for root [${processedRoot.root}]`,
         error
       );
       throw error;
