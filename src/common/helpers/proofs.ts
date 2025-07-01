@@ -123,8 +123,8 @@ export function verifyProof(root: Uint8Array, gI: bigint, proof: Uint8Array[], v
     root: toHex(root),
     gindex: gI.toString(16),
     proofLength: proof.length,
-    proof: proof.map(p => toHex(p)),
-    value: toHex(value)
+    proof: proof.map((p) => toHex(p)),
+    value: toHex(value),
   });
   let buf = value;
 

@@ -5,7 +5,7 @@ import { Inject, Injectable, LoggerService, OnModuleInit, Optional } from '@nest
 import { IncomingHttpHeaders } from 'undici/types/header';
 import BodyReadable from 'undici/types/readable';
 
-import { BeaconConfig, BlockHeaderResponse, BlockId, GenesisResponse, RootHex, StateId } from './response.interface';
+import { BeaconConfig, BlockHeaderResponse, BlockId, GenesisResponse, StateId } from './response.interface';
 import { ValidatorResponse } from './types';
 import { ConfigService } from '../../config/config.service';
 import { PrometheusService, TrackCLRequest } from '../../prometheus';
@@ -38,7 +38,6 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     genesis: 'eth/v1/beacon/genesis',
     blockInfo: (blockId: BlockId): string => `eth/v2/beacon/blocks/${blockId}`,
     beaconHeader: (blockId: BlockId): string => `eth/v1/beacon/headers/${blockId}`,
-    beaconHeadersByParentRoot: (parentRoot: RootHex): string => `eth/v1/beacon/headers?parent_root=${parentRoot}`,
     state: (stateId: StateId): string => `eth/v2/debug/beacon/states/${stateId}`,
     validators: (stateId: StateId): string => `eth/v1/beacon/states/${stateId}/validators`,
   };
@@ -112,16 +111,6 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return jsonBody.data;
   }
 
-  public async getBeaconHeadersByParentRoot(
-    parentRoot: RootHex,
-  ): Promise<{ finalized: boolean; data: BlockHeaderResponse[] }> {
-    // TODO: change to ssz type in case of header struct update
-    const { body } = await this.retryRequest((baseUrl) =>
-      this.baseGet(baseUrl, this.endpoints.beaconHeadersByParentRoot(parentRoot)),
-    );
-    return (await body.json()) as { finalized: boolean; data: BlockHeaderResponse[] };
-  }
-
   public async getState(stateId: StateId, signal?: AbortSignal): Promise<State> {
     const requestPromise = this.retryRequest(async (baseUrl) =>
       this.baseGet(baseUrl, this.endpoints.state(stateId), {
@@ -140,10 +129,8 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
   }
 
   public async getValidators(stateId: StateId): Promise<{ data: ValidatorResponse[] }> {
-    const { body } = await this.retryRequest((baseUrl) =>
-      this.baseGet(baseUrl, this.endpoints.validators(stateId))
-    );
-    const response = await body.json() as { data: ValidatorResponse[] };
+    const { body } = await this.retryRequest((baseUrl) => this.baseGet(baseUrl, this.endpoints.validators(stateId)));
+    const response = (await body.json()) as { data: ValidatorResponse[] };
     return response;
   }
 

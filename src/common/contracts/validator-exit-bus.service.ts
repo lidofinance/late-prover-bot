@@ -121,7 +121,7 @@ export class ExitRequestsContract {
     }
   }
 
-  public async getDeliveryTimestamp(exitRequestsHash: string): Promise<number> {
+  public async getExitRequestDeliveryTimestamp(exitRequestsHash: string): Promise<number> {
     const timestamp = await this.contract.getDeliveryTimestamp(exitRequestsHash);
     return timestamp.toNumber();
   }
