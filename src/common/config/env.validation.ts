@@ -42,6 +42,16 @@ export class EnvironmentVariables {
   @IsString()
   public START_ROOT?: string;
 
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public START_SLOT?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public START_EPOCH?: number;
+
   @IsNotEmpty()
   @IsString()
   public LIDO_LOCATOR_ADDRESS: string;

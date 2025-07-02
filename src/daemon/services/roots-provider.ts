@@ -13,14 +13,16 @@ export class RootsProvider {
     protected readonly config: ConfigService,
     protected readonly consensus: Consensus,
     protected readonly lastProcessedRoot: LastProcessedRoot,
-  ) {}
+  ) { }
 
   /**
    * Get both PREV and LATEST roots.
    * PREV is initialized from:
    * 1. Last processed root from file
-   * 2. Fallback to START_ROOT from env
-   * 3. Fallback to parent of finalized root
+   * 2. Fallback to START_ROOT from env (state root hash)
+   * 3. Fallback to START_SLOT from env (beacon slot number)
+   * 4. Fallback to START_EPOCH from env (beacon epoch number)
+   * 5. Fallback to parent of finalized root
    * 
    * LATEST is always the finalized root.
    * 
@@ -40,7 +42,7 @@ export class RootsProvider {
       this.logger.warn('Failed to get previous root');
       return undefined;
     }
-    
+
     this.logger.debug?.('Roots:', {
       prev: prev.root,
       latest: finalized.root,
@@ -65,7 +67,7 @@ export class RootsProvider {
       }
     }
 
-    // 2. Try to get START_ROOT from env
+    // 2. Try to get START_ROOT from env (state root hash)
     const startRoot = this.config.get('START_ROOT');
     if (startRoot) {
       const header = await this.consensus.getBeaconHeader(startRoot);
@@ -75,7 +77,36 @@ export class RootsProvider {
       }
     }
 
-    // 3. Fallback to parent of finalized root
+    // 3. Try to get START_SLOT from env (beacon slot number)
+    const startSlot = this.config.get('START_SLOT');
+    if (startSlot !== undefined) {
+      try {
+        const header = await this.consensus.getBeaconHeader(startSlot.toString());
+        if (header) {
+          this.logger.log(`Using START_SLOT [${startSlot}] -> root [${header.root}]`);
+          return header;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get header for START_SLOT [${startSlot}]: ${error.message}`);
+      }
+    }
+
+    // 4. Try to get START_EPOCH from env (beacon epoch number)
+    const startEpoch = this.config.get('START_EPOCH');
+    if (startEpoch !== undefined) {
+      try {
+        const slot = startEpoch * Number(this.consensus.beaconConfig?.SLOTS_PER_EPOCH || 32);
+        const header = await this.consensus.getBeaconHeader(slot.toString());
+        if (header) {
+          this.logger.log(`Using START_EPOCH [${startEpoch}] -> slot [${slot}] -> root [${header.root}]`);
+          return header;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get header for START_EPOCH [${startEpoch}]: ${error.message}`);
+      }
+    }
+
+    // 5. Fallback to parent of finalized root
     const parentRoot = finalized.header.message.parent_root;
     if (parentRoot) {
       const header = await this.consensus.getBeaconHeader(parentRoot);
@@ -88,4 +119,8 @@ export class RootsProvider {
     this.logger.warn('Failed to get parent of finalized root');
     return undefined;
   }
+
+  
+
+
 }

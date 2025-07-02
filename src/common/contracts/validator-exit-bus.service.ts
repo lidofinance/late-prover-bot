@@ -28,7 +28,7 @@ export class ExitRequestsContract implements OnModuleInit {
   constructor(
     protected readonly execution: Execution,
     protected readonly lidoLocator: LidoLocatorContract,
-  ) {}
+  ) { }
 
   async onModuleInit(): Promise<void> {
     try {
@@ -38,10 +38,10 @@ export class ExitRequestsContract implements OnModuleInit {
 
       // Import the full ABI JSON
       const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
-      
+
       // Create interface from the ABI
       const iface = new ethers.utils.Interface(contractJson);
-      
+
       this.contract = new ethers.Contract(
         this.exitBusAddress,
         iface,
@@ -60,7 +60,7 @@ export class ExitRequestsContract implements OnModuleInit {
       this.validateBlockRange(fromBlock, toBlock);
 
       this.logger.debug(`Fetching exit requests from block ${fromBlock} to ${toBlock}`);
-      
+
       // Get all ExitDataProcessing events
       const events = await this.contract.queryFilter(
         this.contract.filters.ExitDataProcessing(),
@@ -76,13 +76,26 @@ export class ExitRequestsContract implements OnModuleInit {
       this.logger.debug(`Found ${events.length} exit data processing events`);
 
       const results: ExitRequestsResult[] = [];
+      const transactionCache = new Map<string, ethers.providers.TransactionResponse>();
 
       // Process each event
       for (const event of events) {
         try {
           // Process the transaction and get exit data
           const txHash = event.transactionHash;
-          const tx = await this.execution.provider.getTransaction(txHash);
+
+          // Check cache first, then fetch if not cached
+          let tx = transactionCache.get(txHash);
+          if (!tx) {
+            tx = await this.execution.provider.getTransaction(txHash);
+            if (tx) {
+              transactionCache.set(txHash, tx);
+              this.logger.debug(`Cached transaction ${txHash}`);
+            }
+          } else {
+            this.logger.debug(`Using cached transaction ${txHash}`);
+          }
+
           if (!tx?.data) {
             this.logger.error(`Transaction ${txHash} not found or has no data`);
             continue;
@@ -141,4 +154,6 @@ export class ExitRequestsContract implements OnModuleInit {
     const timestamp = await this.contract.getDeliveryTimestamp(exitRequestsHash);
     return timestamp.toNumber();
   }
+
+
 }
