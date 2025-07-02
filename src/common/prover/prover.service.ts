@@ -1,5 +1,4 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
-import type { ssz as sszType } from '@lodestar/types';
 import { Inject, Injectable, Logger, LoggerService } from '@nestjs/common';
 import { ethers } from 'ethers';
 
@@ -13,7 +12,6 @@ import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../
 import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
 
-let ssz: typeof sszType;
 
 @Injectable()
 export class ProverService {
@@ -21,6 +19,19 @@ export class ProverService {
   private readonly SLOTS_PER_HISTORICAL_ROOT = 8192; // Distance threshold for considering a slot as old
   private readonly logger = new Logger(ProverService.name);
   private readonly FAR_FUTURE_EPOCH = '18446744073709551615'; // 2^64 - 1
+
+  // Persistent storage for validators grouped by deadline slot across multiple handleBlock calls
+  private validatorsByDeadlineSlotStorage = new Map<
+    number,
+    {
+      exitRequest: any;
+      validators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[];
+    }[]
+  >();
 
   constructor(
     @Inject(LOGGER_PROVIDER) private readonly loggerService: LoggerService,
@@ -100,7 +111,7 @@ export class ProverService {
       `\n  Slot: ${deadlineSlot}` +
       `\n  Validators in group: ${validatorGroup.length}`,
     );
-
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
     // Get deadline state once for the group
     const deadlineState = await this.consensus.getState(deadlineSlot);
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
@@ -262,6 +273,31 @@ export class ProverService {
   }
 
   /**
+   * Add validators from an exit request to the persistent storage
+   * @param validatorsByDeadlineSlot Validators grouped by deadline slot from a single exit request
+   */
+  private addToValidatorStorage(
+    validatorsByDeadlineSlot: Map<
+      number,
+      {
+        exitRequest: any;
+        validators: {
+          validator: ReturnType<typeof this.decodeValidatorsData>[0];
+          activationEpoch: number;
+          exitDeadlineEpoch: number;
+        }[];
+      }
+    >
+  ): void {
+    for (const [deadlineSlot, groupData] of validatorsByDeadlineSlot) {
+      if (!this.validatorsByDeadlineSlotStorage.has(deadlineSlot)) {
+        this.validatorsByDeadlineSlotStorage.set(deadlineSlot, []);
+      }
+      this.validatorsByDeadlineSlotStorage.get(deadlineSlot)!.push(groupData);
+    }
+  }
+
+  /**
    * Creates batches for block processing
    * @param fromBlock Starting block number
    * @param toBlock Ending block number
@@ -271,7 +307,7 @@ export class ProverService {
   private createBatches(fromBlock: number, toBlock: number, batchSize: number = 10000): Array<{ from: number; to: number }> {
     const blockRange = toBlock - fromBlock;
     const batches: Array<{ from: number; to: number }> = [];
-    
+
     if (blockRange < batchSize) {
       // Single batch for small ranges
       batches.push({ from: fromBlock, to: toBlock });
@@ -284,8 +320,366 @@ export class ProverService {
         currentFrom = currentTo + 1;
       }
     }
-    
+
     return batches;
+  }
+
+  /**
+   * Initialize beacon state and headers for processing
+   */
+  private async initializeBeaconState(fromBlock: number, toBlock: number): Promise<{
+    finalizedStateView: any;
+    provableFinalizedBlockHeader: any;
+    ssz: any;
+  }> {
+    this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
+    const state = await this.consensus.getState('finalized');
+    const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
+    
+    const provableFinalizedBlockHeader = {
+      header: {
+        slot: Number(finalizedBlockHeader.header.message.slot),
+        proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
+        parentRoot: finalizedBlockHeader.header.message.parent_root,
+        stateRoot: finalizedBlockHeader.header.message.state_root,
+        bodyRoot: finalizedBlockHeader.header.message.body_root,
+      },
+      rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
+    };
+    
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+    
+    this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
+    
+    return { finalizedStateView, provableFinalizedBlockHeader, ssz };
+  }
+
+  /**
+   * Process a single exit request and add validators to storage
+   */
+  private async processExitRequest(
+    exitRequest: any,
+    finalizedStateView: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<void> {
+    const requestStartTime = Date.now();
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
+      `\n  Hash: ${exitRequest.exitRequestsHash}` +
+      `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
+    );
+
+    const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
+    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
+      exitRequest.exitRequestsHash,
+    );
+    
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
+      `\n  Validators count: ${validators.length}` +
+      `\n  Delivery timestamp: ${deliveredTimestamp}` +
+      `\n  Processing time: ${Date.now() - requestStartTime}ms`,
+    );
+
+    const groupingStartTime = Date.now();
+    const validatorsByDeadlineSlot = await this.groupValidatorsByDeadlineSlot(
+      validators,
+      deliveredTimestamp,
+      finalizedStateView,
+      exitRequest,
+      fromBlock,
+      toBlock,
+    );
+
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
+      `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
+      `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
+    );
+
+    // Add validators to persistent storage
+    this.addToValidatorStorage(validatorsByDeadlineSlot);
+
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Exit request accumulated:` +
+      `\n  Total validators: ${validators.length}` +
+      `\n  Added to storage` +
+      `\n  Processing time: ${Date.now() - requestStartTime}ms`,
+    );
+  }
+
+  /**
+   * Process all batches of exit requests
+   */
+  private async processBatches(
+    batches: Array<{ from: number; to: number }>,
+    finalizedStateView: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<void> {
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchStartTime = Date.now();
+
+      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`);
+
+      // Fetch exit requests for this batch only
+      const exitRequestsResult = await this.exitRequests.getExitRequestsFromBlock(batch.from, batch.to);
+
+      if (!exitRequestsResult || exitRequestsResult.length === 0) {
+        this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`);
+        continue;
+      }
+
+      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`);
+
+      // Process each exit request in this batch
+      for (const exitRequest of exitRequestsResult) {
+        await this.processExitRequest(exitRequest, finalizedStateView, fromBlock, toBlock);
+      }
+
+      this.logger.log(
+        `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length} completed: ` +
+        `${Date.now() - batchStartTime}ms`
+      );
+    }
+  }
+
+  /**
+   * Process a single deadline slot with all its validators
+   */
+  private async processDeadlineSlot(
+    deadlineSlot: number,
+    groupDataArray: any[],
+    finalizedStateView: any,
+    provableFinalizedBlockHeader: any,
+    ssz: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<{ processedValidators: number; skippedValidators: number }> {
+    // Combine all validators for this deadline slot from all exit requests
+    const allValidators: {
+      validator: ReturnType<typeof this.decodeValidatorsData>[0];
+      activationEpoch: number;
+      exitDeadlineEpoch: number;
+    }[] = [];
+    let exitRequest: any = null;
+
+    for (const groupData of groupDataArray) {
+      allValidators.push(...groupData.validators);
+      if (!exitRequest) {
+        exitRequest = groupData.exitRequest; // Use the first exit request for the group
+      }
+    }
+
+    // Get delivery timestamp from the first exit request
+    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
+      exitRequest.exitRequestsHash,
+    );
+
+    const isOldSlot = await this.isSlotOld(deadlineSlot);
+    const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
+    const proofSlotTimestamp = this.consensus.slotToTimestamp(deadlineSlot);
+    const provableDeadlineBlockHeader = {
+      header: {
+        slot: Number(deadlineBlockHeader.header.message.slot),
+        proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
+        parentRoot: deadlineBlockHeader.header.message.parent_root,
+        stateRoot: deadlineBlockHeader.header.message.state_root,
+        bodyRoot: deadlineBlockHeader.header.message.body_root,
+      },
+      rootsTimestamp: this.calcRootsTimestamp(deadlineSlot),
+    };
+
+    // Process all combined validators for this deadline slot
+    const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
+      allValidators,
+      deadlineSlot,
+      proofSlotTimestamp,
+      deliveredTimestamp,
+      fromBlock,
+      toBlock,
+    );
+
+    if (validatorWitnesses.length === 0) {
+      return { processedValidators: 0, skippedValidators: 0 };
+    }
+
+    if (isOldSlot) {
+      await this.processHistoricalSlot(
+        deadlineSlot,
+        validatorWitnesses,
+        exitRequest,
+        finalizedStateView,
+        provableFinalizedBlockHeader,
+        ssz
+      );
+    } else {
+      await this.processCurrentSlot(
+        validatorWitnesses,
+        exitRequest,
+        provableDeadlineBlockHeader,
+        fromBlock,
+        toBlock
+      );
+    }
+
+    return { processedValidators, skippedValidators };
+  }
+
+  /**
+   * Process historical slot verification
+   */
+  private async processHistoricalSlot(
+    deadlineSlot: number,
+    validatorWitnesses: any[],
+    exitRequest: any,
+    finalizedStateView: any,
+    provableFinalizedBlockHeader: any,
+    ssz: any
+  ): Promise<void> {
+    const summaryIndex = this.calcSummaryIndex(deadlineSlot);
+    const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
+    const summarySlot = this.calcSlotOfSummary(summaryIndex);
+
+    const summaryState = await this.consensus.getState(summarySlot);
+    const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+
+    // Generate proof that this block's root exists in the historical summaries
+    const proof = generateHistoricalStateProof(
+      finalizedStateView,
+      summaryStateView,
+      summaryIndex,
+      rootIndexInSummary,
+    );
+
+    const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
+
+    // Create the historical header witness using the deadline block header
+    await this.verifier.verifyHistoricalValidatorExitDelay(
+      // beaconBlock
+      provableFinalizedBlockHeader,
+      // oldBlock
+      {
+        header: {
+          slot: Number(deadlineBlockHeader.header.message.slot),
+          proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
+          parentRoot: deadlineBlockHeader.header.message.parent_root,
+          stateRoot: deadlineBlockHeader.header.message.state_root,
+          bodyRoot: deadlineBlockHeader.header.message.body_root,
+        },
+        rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
+        proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
+      },
+      validatorWitnesses,
+      exitRequest.exitRequestsData,
+    );
+  }
+
+  /**
+   * Process current slot verification
+   */
+  private async processCurrentSlot(
+    validatorWitnesses: any[],
+    exitRequest: any,
+    provableDeadlineBlockHeader: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<void> {
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
+      `\n  Witnesses count: ${validatorWitnesses.length}` +
+      `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
+    );
+    
+    const verificationStartTime = Date.now();
+    await this.verifyValidatorGroup(
+      validatorWitnesses,
+      provableDeadlineBlockHeader,
+      exitRequest.exitRequestsData,
+    );
+    
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
+      `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
+    );
+  }
+
+  /**
+   * Process all eligible validators from storage
+   */
+  private async processEligibleValidators(
+    finalizedStateView: any,
+    provableFinalizedBlockHeader: any,
+    ssz: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<void> {
+    // Filter storage entries where deadline slot <= current slot
+    const currentSlot = Number(provableFinalizedBlockHeader.header.slot);
+    const eligibleEntries = Array.from(this.validatorsByDeadlineSlotStorage.entries())
+      .filter(([deadlineSlot]) => deadlineSlot <= currentSlot);
+
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Processing accumulated validators from storage:` +
+      `\n  Current slot: ${currentSlot}` +
+      `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
+      `\n  Eligible deadline slots (passed): ${eligibleEntries.length}`
+    );
+
+    if (eligibleEntries.length === 0) {
+      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] No eligible validators to process - all deadlines are in the future`);
+      return;
+    }
+
+    let totalProcessedValidators = 0;
+    let totalSkippedValidators = 0;
+
+    for (const [deadlineSlot, groupDataArray] of eligibleEntries) {
+      const { processedValidators, skippedValidators } = await this.processDeadlineSlot(
+        deadlineSlot,
+        groupDataArray,
+        finalizedStateView,
+        provableFinalizedBlockHeader,
+        ssz,
+        fromBlock,
+        toBlock
+      );
+      
+      totalProcessedValidators += processedValidators;
+      totalSkippedValidators += skippedValidators;
+    }
+
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] All eligible validators processed:` +
+      `\n  Total processed: ${totalProcessedValidators}` +
+      `\n  Total skipped: ${totalSkippedValidators}` +
+      `\n  Deadline slots processed: ${eligibleEntries.length}`
+    );
+
+    // Remove processed entries from storage
+    this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
+  }
+
+  /**
+   * Clean up processed entries from storage
+   */
+  private cleanupProcessedEntries(
+    eligibleEntries: Array<[number, any[]]>,
+    fromBlock: number,
+    toBlock: number
+  ): void {
+    for (const [deadlineSlot] of eligibleEntries) {
+      this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+    }
+
+    this.logger.log(
+      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +
+      `\n  Entries removed: ${eligibleEntries.length}` +
+      `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`
+    );
   }
 
   public async handleBlock(fromBlock: number, toBlock: number): Promise<void> {
@@ -297,181 +691,14 @@ export class ProverService {
       const batches = this.createBatches(fromBlock, toBlock);
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
-      // Get finalized state once for all batches
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
-      const state = await this.consensus.getState('finalized');
-      const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
-      const provableFinalizedBlockHeader = {
-        header: {
-          slot: Number(finalizedBlockHeader.header.message.slot),
-          proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
-          parentRoot: finalizedBlockHeader.header.message.parent_root,
-          stateRoot: finalizedBlockHeader.header.message.state_root,
-          bodyRoot: finalizedBlockHeader.header.message.body_root,
-        },
-        rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
-      };
-      ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-      const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
+      // Initialize beacon state and headers
+      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(fromBlock, toBlock);
 
-      // Process each batch separately
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        const batchStartTime = Date.now();
+      // Process all batches and accumulate validators in storage
+      await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
 
-        this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`);
-
-        // Fetch exit requests for this batch only
-        const exitRequestsResult = await this.exitRequests.getExitRequestsFromBlock(batch.from, batch.to);
-
-        if (!exitRequestsResult || exitRequestsResult.length === 0) {
-          this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`);
-          continue;
-        }
-
-        this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`);
-
-        // Process each exit request in this batch
-        for (const exitRequest of exitRequestsResult) {
-          const requestStartTime = Date.now();
-          this.logger.log(
-            `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
-            `\n  Hash: ${exitRequest.exitRequestsHash}` +
-            `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
-          );
-
-          const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
-          const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
-            exitRequest.exitRequestsHash,
-          );
-          this.logger.log(
-            `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
-            `\n  Validators count: ${validators.length}` +
-            `\n  Delivery timestamp: ${deliveredTimestamp}` +
-            `\n  Processing time: ${Date.now() - requestStartTime}ms`,
-          );
-
-          const groupingStartTime = Date.now();
-          const validatorsByDeadlineSlot = await this.groupValidatorsByDeadlineSlot(
-            validators,
-            deliveredTimestamp,
-            finalizedStateView,
-            exitRequest,
-            fromBlock,
-            toBlock,
-          );
-
-          this.logger.log(
-            `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
-            `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
-            `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
-          );
-
-          let totalProcessedValidators = 0;
-          let totalSkippedValidators = 0;
-
-          for (const [deadlineSlot, groupData] of validatorsByDeadlineSlot) {
-            const { exitRequest: groupExitRequest, validators: validatorGroup } = groupData;
-            const isOldSlot = await this.isSlotOld(deadlineSlot);
-            const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
-            const proofSlotTimestamp = this.consensus.slotToTimestamp(deadlineSlot);
-            const provableDeadlineBlockHeader = {
-              header: {
-                slot: Number(deadlineBlockHeader.header.message.slot),
-                proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-                parentRoot: deadlineBlockHeader.header.message.parent_root,
-                stateRoot: deadlineBlockHeader.header.message.state_root,
-                bodyRoot: deadlineBlockHeader.header.message.body_root,
-              },
-              rootsTimestamp: this.calcRootsTimestamp(deadlineSlot),
-            };
-
-            // here are proofs for all validators in the group
-            const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
-              validatorGroup,
-              deadlineSlot,
-              proofSlotTimestamp,
-              deliveredTimestamp,
-              fromBlock,
-              toBlock,
-            );
-            if (validatorWitnesses.length === 0) {
-              continue;
-            }
-            totalProcessedValidators += processedValidators;
-            totalSkippedValidators += skippedValidators;
-
-            if (isOldSlot) {
-              const summaryIndex = this.calcSummaryIndex(deadlineSlot);
-              const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
-              const summarySlot = this.calcSlotOfSummary(summaryIndex);
-
-              const summaryState = await this.consensus.getState(summarySlot);
-              const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
-
-              // Generate proof that this block's root exists in the historical summaries
-              const proof = generateHistoricalStateProof(
-                finalizedStateView,
-                summaryStateView,
-                summaryIndex,
-                rootIndexInSummary,
-              );
-              // Get the block header for the deadline slot - this is the block where the validator missed their exit deadline
-              const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
-
-              // Create the historical header witness using the deadline block header
-              await this.verifier.verifyHistoricalValidatorExitDelay(
-                // beaconBlock
-                provableFinalizedBlockHeader,
-                // oldBlock
-                {
-                  header: {
-                    slot: Number(deadlineBlockHeader.header.message.slot),
-                    proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-                    parentRoot: deadlineBlockHeader.header.message.parent_root,
-                    stateRoot: deadlineBlockHeader.header.message.state_root,
-                    bodyRoot: deadlineBlockHeader.header.message.body_root,
-                  },
-                  rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
-                  proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
-                },
-                validatorWitnesses,
-                groupExitRequest.exitRequestsData,
-              );
-            } else {
-              this.logger.log(
-                `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
-                `\n  Witnesses count: ${validatorWitnesses.length}` +
-                `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
-              );
-              const verificationStartTime = Date.now();
-              await this.verifyValidatorGroup(
-                validatorWitnesses,
-                provableDeadlineBlockHeader,
-                groupExitRequest.exitRequestsData,
-              );
-              this.logger.log(
-                `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
-                `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
-              );
-            }
-          }
-
-          this.logger.log(
-            `[Blocks ${fromBlock}-${toBlock}] Exit request processing completed:` +
-            `\n  Total validators: ${validators.length}` +
-            `\n  Processed: ${totalProcessedValidators}` +
-            `\n  Skipped: ${totalSkippedValidators}` +
-            `\n  Total processing time: ${Date.now() - requestStartTime}ms`,
-          );
-        }
-
-        this.logger.log(
-          `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length} completed: ` +
-          `${Date.now() - batchStartTime}ms`
-        );
-      }
+      // Process eligible validators from storage
+      await this.processEligibleValidators(finalizedStateView, provableFinalizedBlockHeader, ssz, fromBlock, toBlock);
 
       this.logger.log(
         `[Blocks ${fromBlock}-${toBlock}] Block processing completed:` +
