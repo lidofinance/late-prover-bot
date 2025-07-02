@@ -44,18 +44,6 @@ export class EnvironmentVariables {
 
   @IsNotEmpty()
   @IsString()
-  public VEB_ADDRESS: string;
-
-  @IsNotEmpty()
-  @IsString()
-  public VERIFIER_ADDRESS: string;
-
-  @IsNotEmpty()
-  @IsString()
-  public NOR_ADDRESS: string;
-
-  @IsNotEmpty()
-  @IsString()
   public LIDO_LOCATOR_ADDRESS: string;
 
   @IsNotEmpty()

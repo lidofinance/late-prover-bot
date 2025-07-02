@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BigNumber, ethers } from 'ethers';
 import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
+import { LidoLocatorContract } from './lido-locator.service';
 import { ExitRequestsData } from './types';
 import { join } from 'path';
 
@@ -19,24 +20,39 @@ interface ExitRequestsResult {
 }
 
 @Injectable()
-export class ExitRequestsContract {
+export class ExitRequestsContract implements OnModuleInit {
   private contract: ethers.Contract;
   private readonly logger = new Logger(ExitRequestsContract.name);
+  private exitBusAddress: string;
 
   constructor(
-    protected readonly config: ConfigService,
     protected readonly execution: Execution,
-  ) {
-    const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
-    
-    // Create interface from the ABI
-    const iface = new ethers.utils.Interface(contractJson);
-    
-    this.contract = new ethers.Contract(
-      this.config.get('VEB_ADDRESS'),
-      iface,
-      this.execution.provider,
-    );
+    protected readonly lidoLocator: LidoLocatorContract,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      // Get ValidatorsExitBusOracle address from LidoLocator
+      this.exitBusAddress = await this.lidoLocator.getValidatorsExitBusOracle();
+      this.logger.log(`ValidatorsExitBusOracle address from LidoLocator: ${this.exitBusAddress}`);
+
+      // Import the full ABI JSON
+      const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
+      
+      // Create interface from the ABI
+      const iface = new ethers.utils.Interface(contractJson);
+      
+      this.contract = new ethers.Contract(
+        this.exitBusAddress,
+        iface,
+        this.execution.provider,
+      );
+
+      this.logger.log('ExitRequestsContract initialized successfully');
+    } catch (error) {
+      this.logger.error('Failed to initialize ExitRequestsContract:', error.message);
+      throw error;
+    }
   }
 
   public async getExitRequestsFromBlock(fromBlock: number, toBlock: number): Promise<ExitRequestsResult[]> {

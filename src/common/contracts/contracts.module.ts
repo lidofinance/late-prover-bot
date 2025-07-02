@@ -3,8 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 
 import { VerifierContract } from './validator-exit-delay-verifier.service';
 import { ExitRequestsContract } from './validator-exit-bus.service';
-import { NodeOperatorsRegistryContract } from './nor.service';
 import { LidoLocatorContract } from './lido-locator.service';
+import { StakingRouterContract } from './staking-router.service';
 import { ProvidersModule } from '../providers/providers.module';
 
 @Module({
@@ -12,14 +12,14 @@ import { ProvidersModule } from '../providers/providers.module';
   providers: [
     VerifierContract,
     ExitRequestsContract,
-    NodeOperatorsRegistryContract,
     LidoLocatorContract,
+    StakingRouterContract,
   ],
   exports: [
     VerifierContract,
     ExitRequestsContract,
-    NodeOperatorsRegistryContract,
     LidoLocatorContract,
+    StakingRouterContract,
   ],
 })
 export class ContractsModule {}

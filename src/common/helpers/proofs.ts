@@ -119,13 +119,6 @@ export function generateHistoricalStateProof(
 
 // port of https://github.com/ethereum/go-ethereum/blob/master/beacon/merkle/merkle.go
 export function verifyProof(root: Uint8Array, gI: bigint, proof: Uint8Array[], value: Uint8Array) {
-  console.log('Local verification parameters:', {
-    root: toHex(root),
-    gindex: gI.toString(16),
-    proofLength: proof.length,
-    proof: proof.map((p) => toHex(p)),
-    value: toHex(value),
-  });
   let buf = value;
 
   proof.forEach((p) => {

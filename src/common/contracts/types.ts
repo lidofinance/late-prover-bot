@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import { NodeOperatorsRegistryContract } from './nor.service';
 
 export interface ExitRequestsData {
   data: string;
@@ -24,6 +25,12 @@ export interface HistoricalHeaderWitness {
   proof: string[];
 }
 
+export interface StakingModule {
+  id: number;
+  stakingModuleAddress: string;
+  name: string;
+}
+
 export interface ValidatorWitness {
   exitRequestIndex: number; // uint32
   withdrawalCredentials: string; // bytes32
@@ -36,4 +43,11 @@ export interface ValidatorWitness {
   moduleId: number;
   nodeOpId: number;
   pubkey: string;
+}
+
+export interface StakingModuleContractWrapper {
+  id: number;
+  name: string;
+  address: string;
+  contract: NodeOperatorsRegistryContract;
 }

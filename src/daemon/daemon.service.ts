@@ -10,6 +10,9 @@ import { ConfigService } from '../common/config/config.service';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
 
+// Run once every 5 minutes
+const SLEEP_TIME = 300000;
+
 @Injectable()
 export class DaemonService implements OnModuleInit {
   constructor(
@@ -28,6 +31,7 @@ export class DaemonService implements OnModuleInit {
     const commit = buildInfo.commit;
     const branch = buildInfo.branch;
     const name = APP_NAME;
+    
 
     this.prometheus.buildInfo.labels({ env, name, version, commit, branch }).inc();
   }
@@ -38,7 +42,7 @@ export class DaemonService implements OnModuleInit {
         await this.baseRun();
       } catch (error) {
         this.logger.error('Error in daemon loop', error);
-        await sleep(12000);
+        await sleep(SLEEP_TIME);
       }
     }
   }
@@ -47,14 +51,14 @@ export class DaemonService implements OnModuleInit {
     const roots = await this.rootsProvider.getRoots();
     if (!roots) {
       this.logger.log(`💤 Wait for the next finalized root`);
-      await sleep(12000);
+      await sleep(SLEEP_TIME);
       return;
     }
 
     // If PREV and LATEST are the same, we're caught up
     if (roots.prev.root === roots.latest.root) {
       this.logger.log(`Already at latest root [${roots.latest.root}]`);
-      await sleep(12000);
+      await sleep(SLEEP_TIME);
       return;
     }
 

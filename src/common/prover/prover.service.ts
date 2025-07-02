@@ -5,6 +5,7 @@ import { ethers } from 'ethers';
 
 import { ConfigService } from '../config/config.service';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
+import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ProvableBeaconBlockHeader, ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
@@ -27,10 +28,24 @@ export class ProverService {
     protected readonly exitRequests: ExitRequestsContract,
     protected readonly verifier: VerifierContract,
     protected readonly config: ConfigService,
-    protected readonly nor: NodeOperatorsRegistryContract,
+    protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
   ) {
     this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = this.config.get('SHARD_COMMITTEE_PERIOD_IN_SECONDS');
+  }
+
+  /**
+   * Get the appropriate contract for a specific module ID
+   * @param moduleId The staking module ID
+   * @returns The NodeOperatorsRegistryContract instance
+   * @throws Error if no contract found for the module
+   */
+  private getContractForModule(moduleId: number): NodeOperatorsRegistryContract {
+    const moduleContract = this.stakingRouter.getStakingModuleContract(moduleId);
+    if (!moduleContract) {
+      throw new Error(`No contract found for staking module ${moduleId}.`);
+    }
+    return moduleContract;
   }
 
   private getEligibleExitRequestTimestamp(deliveredTimestamp: number, activationEpoch: number): number {
@@ -48,8 +63,8 @@ export class ProverService {
     return Math.max(deliveredTimestamp, earliestPossibleVoluntaryExitTimestamp);
   }
 
-  private getSecondsSinceExitIsEligible(eligibleExitRequestTimestamp: number, referenceSlotTimestamp: number): number {
-    return referenceSlotTimestamp - eligibleExitRequestTimestamp;
+  private getSecondsSinceExitIsEligible(eligibleExitRequestTimestamp: number, proofSlotTimestamp: number): number {
+    return proofSlotTimestamp - eligibleExitRequestTimestamp;
   }
 
   /**
@@ -138,7 +153,7 @@ export class ProverService {
     validator: ReturnType<typeof this.decodeValidatorsData>[0],
     activationEpoch: number,
     exitDeadlineEpoch: number,
-    deadlineStateView: any,
+    stateView: any,
     proofSlotTimestamp: number,
     deliveredTimestamp: number,
     fromBlock: number,
@@ -146,7 +161,7 @@ export class ProverService {
   ): Promise<ValidatorWitness | null> {
     const validatorStartTime = Date.now();
     const validatorIndex = Number(validator.validatorIndex);
-    const deadlineStateValidator = deadlineStateView.validators.getReadonly(validatorIndex);
+    const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
 
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
       this.logger.log(
@@ -176,7 +191,7 @@ export class ProverService {
         `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
     );
 
-    const isPenaltyApplicable = await this.nor.isValidatorExitDelayPenaltyApplicable(
+    const isPenaltyApplicable = await this.getContractForModule(Number(validator.moduleId)).isValidatorExitDelayPenaltyApplicable(
       Number(validator.nodeOpId),
       proofSlotTimestamp,
       validator.validatorPubkey,
@@ -192,14 +207,7 @@ export class ProverService {
       return null;
     }
 
-    const proofStartTime = Date.now();
-    const proof = generateValidatorProof(deadlineStateView, validatorIndex);
-    this.logger.log(
-      `[Blocks ${fromBlock}-${toBlock}] Generated validator proof:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Proof generation time: ${Date.now() - proofStartTime}ms`,
-    );
-
+    const proof = generateValidatorProof(stateView, validatorIndex);
     let withdrawableEpoch = deadlineStateValidator.withdrawableEpoch;
     if (withdrawableEpoch == Infinity) {
       withdrawableEpoch = this.FAR_FUTURE_EPOCH;
@@ -267,6 +275,16 @@ export class ProverService {
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
       const state = await this.consensus.getState('finalized');
       const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
+      const provableFinalizedBlockHeader = {
+        header: {
+          slot: Number(finalizedBlockHeader.header.message.slot),
+          proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
+          parentRoot: finalizedBlockHeader.header.message.parent_root,
+          stateRoot: finalizedBlockHeader.header.message.state_root,
+          bodyRoot: finalizedBlockHeader.header.message.body_root,
+        },
+        rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
+      };
       ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
       const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
       this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
@@ -312,27 +330,18 @@ export class ProverService {
           const isOldSlot = await this.isSlotOld(deadlineSlot);
           const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
           const proofSlotTimestamp = this.consensus.slotToTimestamp(deadlineSlot);
-          const provableFinalizedBlockHeader = {
-            header: {
-              slot: Number(finalizedBlockHeader.header.message.slot),
-              proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
-              parentRoot: finalizedBlockHeader.header.message.parent_root,
-              stateRoot: finalizedBlockHeader.header.message.state_root,
-              bodyRoot: finalizedBlockHeader.header.message.body_root,
-            },
-            rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
-          };
           const provableDeadlineBlockHeader = {
             header: {
               slot: Number(deadlineBlockHeader.header.message.slot),
               proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-              parentRoot: ethers.utils.hexlify(deadlineBlockHeader.header.message.parent_root),
-              stateRoot: ethers.utils.hexlify(deadlineBlockHeader.header.message.state_root),
-              bodyRoot: ethers.utils.hexlify(deadlineBlockHeader.header.message.body_root),
+              parentRoot: deadlineBlockHeader.header.message.parent_root,
+              stateRoot: deadlineBlockHeader.header.message.state_root,
+              bodyRoot: deadlineBlockHeader.header.message.body_root,
             },
             rootsTimestamp: this.calcRootsTimestamp(deadlineSlot),
           };
 
+          // here are proofs for all validators in the group
           const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
             validatorGroup,
             deadlineSlot,
@@ -483,8 +492,9 @@ export class ProverService {
       const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
       const withdrawableEpoch = stateValidator.withdrawableEpoch;
 
-      const exitDeadlineThreshold = await this.nor.exitDeadlineThreshold(Number(validator.nodeOpId));
+      const exitDeadlineThreshold = await this.getContractForModule(Number(validator.moduleId)).exitDeadlineThreshold(Number(validator.nodeOpId));
       const exitDeadline = eligibleExitRequestTimestamp + exitDeadlineThreshold;
+      // this is the slot where validator must exit
       const exitDeadlineSlot = this.calculateSlotFromExitDeadline(exitDeadline);
       const exitDeadlineEpoch = this.consensus.slotToEpoch(exitDeadlineSlot);
 

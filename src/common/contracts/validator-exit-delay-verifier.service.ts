@@ -1,45 +1,61 @@
 import { join } from 'path';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
 
 import { ExitRequestsData, HistoricalHeaderWitness, ProvableBeaconBlockHeader, ValidatorWitness } from './types';
 import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
+import { LidoLocatorContract } from './lido-locator.service';
 
 @Injectable()
-export class VerifierContract {
+export class VerifierContract implements OnModuleInit {
   private contract: ethers.Contract;
   private contractWithSigner: ethers.Contract;
   private readonly logger = new Logger(VerifierContract.name);
+  private verifierAddress: string;
 
   constructor(
     protected readonly config: ConfigService,
     protected readonly execution: Execution,
-  ) {
-    // Import the full ABI JSON
-    const contractJson = require(
-      join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-delay-verifier.json'),
-    );
+    protected readonly lidoLocator: LidoLocatorContract,
+  ) {}
 
-    // Create interface from the ABI
-    const iface = new ethers.utils.Interface(contractJson);
+  async onModuleInit(): Promise<void> {
+    try {
+      // Get ValidatorExitDelayVerifier address from LidoLocator
+      this.verifierAddress = await this.lidoLocator.getValidatorExitDelayVerifier();
+      this.logger.log(`ValidatorExitDelayVerifier address from LidoLocator: ${this.verifierAddress}`);
 
-    this.contract = new ethers.Contract(this.config.get('VERIFIER_ADDRESS'), iface, this.execution.provider);
+      // Import the full ABI JSON
+      const contractJson = require(
+        join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-delay-verifier.json'),
+      );
 
-    // Create a contract instance with signer for transactions
-    const privateKey = this.config.get('TX_SIGNER_PRIVATE_KEY');
-    // Convert comma-separated numbers to hex string if needed
-    const formattedPrivateKey = privateKey.includes(',')
-      ? '0x' +
-        privateKey
-          .split(',')
-          .map((n) => parseInt(n).toString(16).padStart(2, '0'))
-          .join('')
-      : privateKey;
+      // Create interface from the ABI
+      const iface = new ethers.utils.Interface(contractJson);
 
-    const signer = new ethers.Wallet(formattedPrivateKey, this.execution.provider);
-    this.contractWithSigner = this.contract.connect(signer);
+      this.contract = new ethers.Contract(this.verifierAddress, iface, this.execution.provider);
+
+      // Create a contract instance with signer for transactions
+      const privateKey = this.config.get('TX_SIGNER_PRIVATE_KEY');
+      // Convert comma-separated numbers to hex string if needed
+      const formattedPrivateKey = privateKey.includes(',')
+        ? '0x' +
+          privateKey
+            .split(',')
+            .map((n) => parseInt(n).toString(16).padStart(2, '0'))
+            .join('')
+        : privateKey;
+
+      const signer = new ethers.Wallet(formattedPrivateKey, this.execution.provider);
+      this.contractWithSigner = this.contract.connect(signer);
+
+      this.logger.log('VerifierContract initialized successfully');
+    } catch (error) {
+      this.logger.error('Failed to initialize VerifierContract:', error.message);
+      throw error;
+    }
   }
 
   public async verifyValidatorExitDelay(

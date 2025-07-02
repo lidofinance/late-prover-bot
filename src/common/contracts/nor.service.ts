@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { ethers } from 'ethers';
-import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
 
 @Injectable()
@@ -8,7 +7,7 @@ export class NodeOperatorsRegistryContract {
   private contract: ethers.Contract;
 
   constructor(
-    protected readonly config: ConfigService,
+    protected readonly address: string,
     protected readonly execution: Execution,
   ) {
     const abi = [
@@ -17,7 +16,7 @@ export class NodeOperatorsRegistryContract {
     ];
     
     this.contract = new ethers.Contract(
-      this.config.get('NOR_ADDRESS'),
+      address,
       abi,
       this.execution.provider,
     );
