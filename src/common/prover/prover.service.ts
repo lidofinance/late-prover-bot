@@ -1,8 +1,6 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
-import { Inject, Injectable, Logger, LoggerService } from '@nestjs/common';
+import { Inject, Injectable, LoggerService, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
-
-import { ConfigService } from '../config/config.service';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
 import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ProvableBeaconBlockHeader, ValidatorWitness } from '../contracts/types';
@@ -14,10 +12,8 @@ import { Execution } from '../providers/execution/execution';
 
 
 @Injectable()
-export class ProverService {
-  private readonly SHARD_COMMITTEE_PERIOD_IN_SECONDS: number;
-  private readonly SLOTS_PER_HISTORICAL_ROOT = 8192; // Distance threshold for considering a slot as old
-  private readonly logger = new Logger(ProverService.name);
+export class ProverService implements OnModuleInit {
+  private SHARD_COMMITTEE_PERIOD_IN_SECONDS: number;
   private readonly FAR_FUTURE_EPOCH = '18446744073709551615'; // 2^64 - 1
 
   // Persistent storage for validators grouped by deadline slot across multiple handleBlock calls
@@ -38,11 +34,18 @@ export class ProverService {
     protected readonly consensus: Consensus,
     protected readonly exitRequests: ExitRequestsContract,
     protected readonly verifier: VerifierContract,
-    protected readonly config: ConfigService,
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
-  ) {
-    this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = this.config.get('SHARD_COMMITTEE_PERIOD_IN_SECONDS');
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = await this.verifier.getShardCommitteePeriodInSeconds();
+      this.loggerService.log(`SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract: ${this.SHARD_COMMITTEE_PERIOD_IN_SECONDS}`);
+    } catch (error) {
+      this.loggerService.error('Failed to initialize SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract:', error.message);
+      throw error;
+    }
   }
 
   /**
@@ -106,7 +109,7 @@ export class ProverService {
     skippedValidators: number;
   }> {
     const groupStartTime = Date.now();
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
       `\n  Slot: ${deadlineSlot}` +
       `\n  Validators in group: ${validatorGroup.length}`,
@@ -117,7 +120,7 @@ export class ProverService {
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
 
     if (!deadlineStateView) {
-      this.logger.error(
+      this.loggerService.error(
         `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`,
       );
       return {
@@ -151,7 +154,7 @@ export class ProverService {
       }
     }
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Deadline slot group processing completed:` +
       `\n  Slot: ${deadlineSlot}` +
       `\n  Processing time: ${Date.now() - groupStartTime}ms`,
@@ -175,7 +178,7 @@ export class ProverService {
     const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
 
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
-      this.logger.log(
+      this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator already exited:` +
         `\n  Index: ${validatorIndex}` +
         `\n  Public key: ${validator.validatorPubkey}` +
@@ -195,7 +198,7 @@ export class ProverService {
       proofSlotTimestamp,
     );
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Validator eligibility check:` +
       `\n  Index: ${validatorIndex}` +
       `\n  Seconds since eligible: ${secondsSinceExitIsEligible}` +
@@ -210,7 +213,7 @@ export class ProverService {
     );
 
     if (!isPenaltyApplicable) {
-      this.logger.log(
+      this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
         `\n  Index: ${validatorIndex}` +
         `\n  Public key: ${validator.validatorPubkey}`,
@@ -238,7 +241,7 @@ export class ProverService {
       pubkey: validator.validatorPubkey,
     };
 
-    this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Added validator ${validatorIndex} to witnesses`);
+    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Added validator ${validatorIndex} to witnesses`);
     return witness;
   }
 
@@ -247,7 +250,7 @@ export class ProverService {
     beaconBlock: ProvableBeaconBlockHeader,
     exitRequestsData: any,
   ): Promise<void> {
-    this.logger.debug(
+    this.loggerService.debug?.(
       'Beacon block:',
       JSON.stringify(
         {
@@ -266,7 +269,7 @@ export class ProverService {
     );
 
     if (validatorWitnesses.length > 0) {
-      this.logger.debug('ValidatorWitnesses:', JSON.stringify(validatorWitnesses, null, 2));
+      this.loggerService.debug?.('ValidatorWitnesses:', JSON.stringify(validatorWitnesses, null, 2));
     }
 
     await this.verifier.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequestsData);
@@ -332,7 +335,7 @@ export class ProverService {
     provableFinalizedBlockHeader: any;
     ssz: any;
   }> {
-    this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
+    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
     const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
     
@@ -350,7 +353,7 @@ export class ProverService {
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
     const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
     
-    this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
+    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
     
     return { finalizedStateView, provableFinalizedBlockHeader, ssz };
   }
@@ -365,7 +368,7 @@ export class ProverService {
     toBlock: number
   ): Promise<void> {
     const requestStartTime = Date.now();
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
       `\n  Hash: ${exitRequest.exitRequestsHash}` +
       `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
@@ -376,7 +379,7 @@ export class ProverService {
       exitRequest.exitRequestsHash,
     );
     
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
       `\n  Validators count: ${validators.length}` +
       `\n  Delivery timestamp: ${deliveredTimestamp}` +
@@ -393,7 +396,7 @@ export class ProverService {
       toBlock,
     );
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
       `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
       `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
@@ -402,7 +405,7 @@ export class ProverService {
     // Add validators to persistent storage
     this.addToValidatorStorage(validatorsByDeadlineSlot);
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Exit request accumulated:` +
       `\n  Total validators: ${validators.length}` +
       `\n  Added to storage` +
@@ -423,24 +426,24 @@ export class ProverService {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`);
+      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`);
 
       // Fetch exit requests for this batch only
       const exitRequestsResult = await this.exitRequests.getExitRequestsFromBlock(batch.from, batch.to);
 
       if (!exitRequestsResult || exitRequestsResult.length === 0) {
-        this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`);
+        this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`);
         continue;
       }
 
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`);
+      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`);
 
       // Process each exit request in this batch
       for (const exitRequest of exitRequestsResult) {
         await this.processExitRequest(exitRequest, finalizedStateView, fromBlock, toBlock);
       }
 
-      this.logger.log(
+      this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length} completed: ` +
         `${Date.now() - batchStartTime}ms`
       );
@@ -588,7 +591,7 @@ export class ProverService {
     fromBlock: number,
     toBlock: number
   ): Promise<void> {
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
       `\n  Witnesses count: ${validatorWitnesses.length}` +
       `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
@@ -601,7 +604,7 @@ export class ProverService {
       exitRequest.exitRequestsData,
     );
     
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
       `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
     );
@@ -622,7 +625,7 @@ export class ProverService {
     const eligibleEntries = Array.from(this.validatorsByDeadlineSlotStorage.entries())
       .filter(([deadlineSlot]) => deadlineSlot <= currentSlot);
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing accumulated validators from storage:` +
       `\n  Current slot: ${currentSlot}` +
       `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
@@ -630,7 +633,7 @@ export class ProverService {
     );
 
     if (eligibleEntries.length === 0) {
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] No eligible validators to process - all deadlines are in the future`);
+      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] No eligible validators to process - all deadlines are in the future`);
       return;
     }
 
@@ -652,7 +655,7 @@ export class ProverService {
       totalSkippedValidators += skippedValidators;
     }
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] All eligible validators processed:` +
       `\n  Total processed: ${totalProcessedValidators}` +
       `\n  Total skipped: ${totalSkippedValidators}` +
@@ -675,7 +678,7 @@ export class ProverService {
       this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
     }
 
-    this.logger.log(
+    this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +
       `\n  Entries removed: ${eligibleEntries.length}` +
       `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`
@@ -685,11 +688,11 @@ export class ProverService {
   public async handleBlock(fromBlock: number, toBlock: number): Promise<void> {
     const startTime = Date.now();
     try {
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Starting block processing`);
+      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Starting block processing`);
 
       // Prepare batches for processing
       const batches = this.createBatches(fromBlock, toBlock);
-      this.logger.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
+      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
       // Initialize beacon state and headers
       const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(fromBlock, toBlock);
@@ -700,12 +703,12 @@ export class ProverService {
       // Process eligible validators from storage
       await this.processEligibleValidators(finalizedStateView, provableFinalizedBlockHeader, ssz, fromBlock, toBlock);
 
-      this.logger.log(
+      this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Block processing completed:` +
         `\n  Total processing time: ${Date.now() - startTime}ms`,
       );
     } catch (error) {
-      this.logger.error(
+      this.loggerService.error(
         `[Blocks ${fromBlock}-${toBlock}] Processing failed:` +
         `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
         `\n  Total time: ${Date.now() - startTime}ms`,
@@ -783,7 +786,7 @@ export class ProverService {
       const exitDeadlineSlot = this.calculateSlotFromExitDeadline(exitDeadline);
       const exitDeadlineEpoch = this.consensus.slotToEpoch(exitDeadlineSlot);
 
-      this.logger.debug?.(
+      this.loggerService.debug?.(
         `[Blocks ${fromBlock}-${toBlock}] Validator details:` +
         `\n  Index: ${validatorIndex}` +
         `\n  Public key: ${validator.validatorPubkey}` +
@@ -897,17 +900,19 @@ export class ProverService {
       const currentSlot = Number(currentHeader.header.message.slot);
       const distance = currentSlot - slot;
 
-      this.logger.debug(
+      const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
+
+      this.loggerService.debug?.(
         `Checking if slot ${slot} is old:` +
         `\n  Current slot: ${currentSlot}` +
         `\n  Distance: ${distance}` +
-        `\n  Threshold: ${this.SLOTS_PER_HISTORICAL_ROOT}` +
-        `\n  Is old: ${distance >= this.SLOTS_PER_HISTORICAL_ROOT}`,
+        `\n  Threshold: ${slotsPerHistoricalRoot}` +
+        `\n  Is old: ${distance >= slotsPerHistoricalRoot}`,
       );
 
-      return distance >= this.SLOTS_PER_HISTORICAL_ROOT;
+      return distance >= slotsPerHistoricalRoot;
     } catch (error) {
-      this.logger.error(`Failed to determine if slot ${slot} is old: ${this.serializeError(error)}`);
+      this.loggerService.error(`Failed to determine if slot ${slot} is old: ${this.serializeError(error)}`);
       throw error;
     }
   }

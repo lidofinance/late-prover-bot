@@ -163,9 +163,7 @@ export class EnvironmentVariables {
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public CL_API_MAX_RETRIES = 3;
 
-  @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public SHARD_COMMITTEE_PERIOD_IN_SECONDS!: number;
+
 }
 
 export function validate(config: Record<string, unknown>) {

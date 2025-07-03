@@ -58,6 +58,16 @@ export class VerifierContract implements OnModuleInit {
     }
   }
 
+  public async getShardCommitteePeriodInSeconds(): Promise<number> {
+    try {
+      const result = await this.contract.SHARD_COMMITTEE_PERIOD_IN_SECONDS();
+      return Number(result);
+    } catch (error) {
+      this.logger.error('Error getting SHARD_COMMITTEE_PERIOD_IN_SECONDS:', error.reason || error.message);
+      throw error;
+    }
+  }
+
   public async verifyValidatorExitDelay(
     beaconBlock: ProvableBeaconBlockHeader,
     validatorWitnesses: ValidatorWitness[],
