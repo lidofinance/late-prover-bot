@@ -36,16 +36,81 @@ export class ProverService implements OnModuleInit {
     protected readonly verifier: VerifierContract,
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
-  ) {}
+  ) { }
 
   async onModuleInit(): Promise<void> {
     try {
       this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = await this.verifier.getShardCommitteePeriodInSeconds();
       this.loggerService.log(`SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract: ${this.SHARD_COMMITTEE_PERIOD_IN_SECONDS}`);
+      
+      // Initialize storage with last 7 days of validator events
+      await this.initializeStorageWithRecentEvents();
     } catch (error) {
-      this.loggerService.error('Failed to initialize SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract:', error.message);
+      this.loggerService.error('Failed to initialize ProverService:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * Initialize storage with validator events from the last 7 days
+   */
+  private async initializeStorageWithRecentEvents(): Promise<void> {
+    try {
+      this.loggerService.log('Initializing storage with recent validator events...');
+      
+      // Calculate block range for last 7 days
+      const currentBlock = await this.execution.provider.getBlockNumber();
+      const SECONDS_PER_DAY = 24 * 60 * 60;
+      const DAYS_TO_LOOK_BACK = 7;
+      const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
+      
+      const blocksToLookBack = Math.floor((DAYS_TO_LOOK_BACK * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
+      const fromBlock = Math.max(1, currentBlock - blocksToLookBack);
+      
+      this.loggerService.log(
+        `Scanning for exit requests in recent blocks:` +
+        `\n  Current block: ${currentBlock}` +
+        `\n  From block: ${fromBlock}` +
+        `\n  Block range: ${blocksToLookBack} blocks (${DAYS_TO_LOOK_BACK} days)`
+      );
+      
+      // Use the same batch processing but without eligible validator processing
+      await this.accumulateValidatorsFromBlocks(fromBlock, currentBlock);
+      
+      this.loggerService.log(
+        `Storage initialization completed:` +
+        `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`
+      );
+    } catch (error) {
+      this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      // Don't throw here - let the service start even if initialization fails
+    }
+  }
+
+  /**
+   * Accumulate validators from blocks without processing eligible ones
+   * Similar to handleBlock but only accumulates validators in storage
+   */
+  private async accumulateValidatorsFromBlocks(fromBlock: number, toBlock: number): Promise<void> {
+    const startTime = Date.now();
+    
+    this.loggerService.log(`[Init ${fromBlock}-${toBlock}] Starting validator accumulation`);
+
+    // Prepare batches for processing
+    const batches = this.createBatches(fromBlock, toBlock);
+    this.loggerService.log(`[Init ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
+
+    // Initialize beacon state and headers
+    const { finalizedStateView } = await this.initializeBeaconState(fromBlock, toBlock);
+
+    // Process all batches and accumulate validators in storage (without processing eligible ones)
+    await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
+
+    this.loggerService.log(
+      `[Init ${fromBlock}-${toBlock}] Validator accumulation completed:` +
+      `\n  Total processing time: ${Date.now() - startTime}ms` +
+      `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`
+    );
   }
 
   /**
@@ -338,7 +403,7 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
     const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
-    
+
     const provableFinalizedBlockHeader = {
       header: {
         slot: Number(finalizedBlockHeader.header.message.slot),
@@ -349,12 +414,12 @@ export class ProverService implements OnModuleInit {
       },
       rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
     };
-    
+
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
     const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
-    
+
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
-    
+
     return { finalizedStateView, provableFinalizedBlockHeader, ssz };
   }
 
@@ -378,7 +443,7 @@ export class ProverService implements OnModuleInit {
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
       exitRequest.exitRequestsHash,
     );
-    
+
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
       `\n  Validators count: ${validators.length}` +
@@ -596,14 +661,14 @@ export class ProverService implements OnModuleInit {
       `\n  Witnesses count: ${validatorWitnesses.length}` +
       `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
     );
-    
+
     const verificationStartTime = Date.now();
     await this.verifyValidatorGroup(
       validatorWitnesses,
       provableDeadlineBlockHeader,
       exitRequest.exitRequestsData,
     );
-    
+
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
       `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
@@ -650,7 +715,7 @@ export class ProverService implements OnModuleInit {
         fromBlock,
         toBlock
       );
-      
+
       totalProcessedValidators += processedValidators;
       totalSkippedValidators += skippedValidators;
     }
