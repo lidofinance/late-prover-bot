@@ -40,3 +40,9 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
+
+# Yarn cache and state files
+.yarn/cache/
+.yarn/install-state.gz
+.yarn/build-state.yml
+.yarn/unplugged/
