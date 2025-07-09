@@ -138,7 +138,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return this.baseUrls[0]; // Always use the first URL for now
   }
 
-  @TrackCLRequest
+  @TrackCLRequest()
   protected baseGet(
     baseUrl: string,
     endpoint: string,

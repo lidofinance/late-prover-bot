@@ -9,7 +9,7 @@ import { ProverService } from '../../common/prover/prover.service';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
 import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
-
+import { getSizeRangeCategory } from '../../common/prometheus/decorators';
 
 @Injectable()
 export class RootsProcessor {
@@ -32,6 +32,7 @@ export class RootsProcessor {
    * Note: We only process one root at a time to ensure proper ordering
    * and to avoid processing too many roots at once.
    */
+  @TrackTask('roots-processing')
   public async process(prev: BlockHeaderResponse, latest: BlockHeaderResponse): Promise<void> {
     this.logger.log(`Processing root [${prev.root}] at slot [${prev.header.message.slot}]`);
 
@@ -56,6 +57,8 @@ export class RootsProcessor {
     prevHeader: BlockHeaderResponse,
     finalizedHeader: BlockHeaderResponse,
   ): Promise<void> {
+    const processingStartTime = Date.now();
+    
     // CL blocks handling
     const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
     const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
@@ -65,9 +68,51 @@ export class RootsProcessor {
     // EL blocks handling
     const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number
     const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number
+    
+    const blockRange = finalizedBlockNumber - prevBlockNumber;
+    const rangeSizeCategory = getSizeRangeCategory(blockRange);
+    
+    // Track block range processing
+    const stopBlockRangeTimer = this.prometheus.blockRangeProcessingDuration.startTimer({
+      range_size_category: rangeSizeCategory
+    });
+    
+    // Track block range size
+    this.prometheus.blockRangeSize.observe(
+      { processing_type: 'daemon_processing' },
+      blockRange
+    );
+    
+    this.logger.log(
+      `Processing block range:` +
+      `\n  From block: ${prevBlockNumber}` +
+      `\n  To block: ${finalizedBlockNumber}` +
+      `\n  Range size: ${blockRange} blocks`
+    );
 
-    // Process the block
-    await this.prover.handleBlock(prevBlockNumber, finalizedBlockNumber);
+    try {
+      // Process the block
+      await this.prover.handleBlock(prevBlockNumber, finalizedBlockNumber);
+      
+      const processingDuration = Date.now() - processingStartTime;
+      
+      this.logger.log(
+        `✅ Block range processing completed:` +
+        `\n  Range: ${prevBlockNumber} -> ${finalizedBlockNumber}` +
+        `\n  Size: ${blockRange} blocks` +
+        `\n  Duration: ${processingDuration}ms` +
+        `\n  Avg per block: ${(processingDuration / blockRange).toFixed(2)}ms`
+      );
+      
+    } catch (error) {
+      this.logger.error(
+        `Failed to process block range ${prevBlockNumber}-${finalizedBlockNumber}`,
+        error
+      );
+      throw error;
+    } finally {
+      stopBlockRangeTimer();
+    }
   }
 
   /**

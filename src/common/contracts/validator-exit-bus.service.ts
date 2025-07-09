@@ -1,10 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BigNumber, ethers } from 'ethers';
-import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
 import { LidoLocatorContract } from './lido-locator.service';
 import { ExitRequestsData } from './types';
 import { join } from 'path';
+import { PrometheusService } from '../prometheus/prometheus.service';
+import { getSizeRangeCategory } from '../prometheus/decorators';
 
 interface ReportData {
   consensusVersion: number;
@@ -28,6 +29,7 @@ export class ExitRequestsContract implements OnModuleInit {
   constructor(
     protected readonly execution: Execution,
     protected readonly lidoLocator: LidoLocatorContract,
+    protected readonly prometheus: PrometheusService,
   ) { }
 
   async onModuleInit(): Promise<void> {
@@ -56,6 +58,21 @@ export class ExitRequestsContract implements OnModuleInit {
   }
 
   public async getExitRequestsFromBlock(fromBlock: number, toBlock: number): Promise<ExitRequestsResult[]> {
+    const startTime = Date.now();
+    const blockRange = toBlock - fromBlock;
+    const rangeSizeCategory = getSizeRangeCategory(blockRange);
+    
+    // Track batch processing for exit requests
+    const stopBatchTimer = this.prometheus.batchProcessingDuration.startTimer({
+      batch_size_range: rangeSizeCategory
+    });
+    
+    // Track batch size
+    this.prometheus.batchSize.observe(
+      { processing_type: 'exit_requests_fetch' },
+      blockRange
+    );
+
     try {
       this.validateBlockRange(fromBlock, toBlock);
 
@@ -70,17 +87,31 @@ export class ExitRequestsContract implements OnModuleInit {
 
       if (events.length === 0) {
         this.logger.debug('No exit data processing events found in the specified range');
+        
+        // Track zero exit requests found
+        this.prometheus.exitRequestsFoundCount.inc({
+          block_range_type: rangeSizeCategory
+        }, 0);
+        
         return [];
       }
 
       this.logger.debug(`Found ${events.length} exit data processing events`);
+      
+      // Track exit requests found
+      this.prometheus.exitRequestsFoundCount.inc({
+        block_range_type: rangeSizeCategory
+      }, events.length);
 
       const results: ExitRequestsResult[] = [];
       const transactionCache = new Map<string, ethers.providers.TransactionResponse>();
 
-      // Process each event
+      let processedCount = 0;
+      let errorCount = 0;
+
       for (const event of events) {
         try {
+          processedCount++;
           // Process the transaction and get exit data
           const txHash = event.transactionHash;
 
@@ -124,36 +155,103 @@ export class ExitRequestsContract implements OnModuleInit {
             exitRequestsHash,
           });
         } catch (error) {
+          errorCount++;
           this.logger.error(`Failed to process event: ${error.message}`);
           continue;
         }
       }
 
+      // Track processing results
+      this.prometheus.exitRequestsProcessedCount.inc(
+        { status: 'success' },
+        processedCount
+      );
+      
+      if (errorCount > 0) {
+        this.prometheus.exitRequestsProcessedCount.inc(
+          { status: 'error' },
+          errorCount
+        );
+      }
+
+      const totalDuration = Date.now() - startTime;
+      this.logger.debug(
+        `Exit requests processing completed:` +
+        `\n  Block range: ${fromBlock}-${toBlock} (${blockRange} blocks)` +
+        `\n  Events found: ${events.length}` +
+        `\n  Successfully processed: ${processedCount}` +
+        `\n  Errors: ${errorCount}` +
+        `\n  Total duration: ${totalDuration}ms` +
+        `\n  Avg per event: ${events.length > 0 ? (totalDuration / events.length).toFixed(2) : 0}ms`
+      );
+
       return results;
 
     } catch (error) {
-      throw new Error(
-        `Failed to get exit requests from blocks ${fromBlock}-${toBlock}: ${error.message}`
+      this.logger.error(`Failed to fetch exit requests from blocks ${fromBlock}-${toBlock}:`, error);
+      
+      // Track error in exit requests processing
+      this.prometheus.exitRequestsProcessedCount.inc(
+        { status: 'fetch_error' },
+        1
       );
-    }
-  }
-
-  private validateBlockRange(fromBlock: number, toBlock: number): void {
-    if (!Number.isInteger(fromBlock) || fromBlock < 0) {
-      throw new Error(`Invalid fromBlock: ${fromBlock}`);
-    }
-    if (!Number.isInteger(toBlock) || toBlock < 0) {
-      throw new Error(`Invalid toBlock: ${toBlock}`);
-    }
-    if (fromBlock > toBlock) {
-      throw new Error(`fromBlock (${fromBlock}) is greater than toBlock (${toBlock}`);
+      
+      throw error;
+    } finally {
+      stopBatchTimer();
     }
   }
 
   public async getExitRequestDeliveryTimestamp(exitRequestsHash: string): Promise<number> {
-    const timestamp = await this.contract.getDeliveryTimestamp(exitRequestsHash);
-    return timestamp.toNumber();
+    const startTime = Date.now();
+    
+    // Track contract call for delivery timestamp
+    const stopContractTimer = this.prometheus.contractCallDuration.startTimer({
+      contract_type: 'exit_bus',
+      method: 'getDeliveryTimestamp'
+    });
+    
+    try {
+      const timestamp = await this.contract.getDeliveryTimestamp(exitRequestsHash);
+      
+      this.prometheus.contractCallCount.inc({
+        contract_type: 'exit_bus',
+        method: 'getDeliveryTimestamp',
+        status: 'success'
+      });
+      
+      const duration = Date.now() - startTime;
+      if (duration > 2000) { // Log slow calls
+        this.logger.debug(`Slow delivery timestamp fetch: ${duration}ms for hash ${exitRequestsHash}`);
+      }
+      
+      return timestamp.toNumber();
+      
+    } catch (error) {
+      this.prometheus.contractCallCount.inc({
+        contract_type: 'exit_bus',
+        method: 'getDeliveryTimestamp',
+        status: 'error'
+      });
+      
+      this.logger.error(`Failed to get delivery timestamp for ${exitRequestsHash}:`, error);
+      throw error;
+    } finally {
+      stopContractTimer();
+    }
   }
 
-
+  private validateBlockRange(fromBlock: number, toBlock: number): void {
+    if (fromBlock < 0 || toBlock < 0) {
+      throw new Error('Block numbers must be non-negative');
+    }
+    
+    if (fromBlock > toBlock) {
+      throw new Error('fromBlock must be less than or equal to toBlock');
+    }
+    
+    if (toBlock - fromBlock > 100000) {
+      this.logger.warn(`Large block range detected: ${toBlock - fromBlock} blocks`);
+    }
+  }
 }

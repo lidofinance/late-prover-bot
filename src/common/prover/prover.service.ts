@@ -9,6 +9,8 @@ import { VerifierContract } from '../contracts/validator-exit-delay-verifier.ser
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
+import { PrometheusService } from '../prometheus/prometheus.service';
+import { getSizeRangeCategory } from '../prometheus/decorators';
 
 
 @Injectable()
@@ -36,6 +38,7 @@ export class ProverService implements OnModuleInit {
     protected readonly verifier: VerifierContract,
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
+    protected readonly prometheus: PrometheusService,
   ) { }
 
   async onModuleInit(): Promise<void> {
@@ -83,7 +86,6 @@ export class ProverService implements OnModuleInit {
       );
     } catch (error) {
       this.loggerService.error('Failed to initialize storage with recent events:', error.message);
-      // Don't throw here - let the service start even if initialization fails
     }
   }
 
@@ -174,17 +176,50 @@ export class ProverService implements OnModuleInit {
     skippedValidators: number;
   }> {
     const groupStartTime = Date.now();
+    const groupSize = validatorGroup.length;
+    const groupSizeRange = getSizeRangeCategory(groupSize);
+    
+    // Track validator group processing
+    const stopGroupTimer = this.prometheus.validatorGroupProcessingDuration.startTimer({
+      deadline_slot: deadlineSlot.toString(),
+      group_size_range: groupSizeRange,
+    });
+    
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
       `\n  Slot: ${deadlineSlot}` +
       `\n  Validators in group: ${validatorGroup.length}`,
     );
+    
+    // Track eligible validators
+    this.prometheus.validatorsEligibleCount.set(
+      { module_id: 'all' },
+      groupSize
+    );
+    
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-    // Get deadline state once for the group
+    
+    // Track beacon state fetch
+    const stopStateFetch = this.prometheus.beaconStateFetchDuration.startTimer({
+      state_type: 'deadline'
+    });
+    
     const deadlineState = await this.consensus.getState(deadlineSlot);
+    stopStateFetch();
+    
+    // Track state deserialization
+    const stopDeserialization = this.prometheus.beaconStateDeserializationDuration.startTimer({
+      fork_name: deadlineState.forkName
+    });
+    
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
+    stopDeserialization();
 
     if (!deadlineStateView) {
+      this.prometheus.stateDeserializationErrorsCount.inc({
+        fork_name: deadlineState.forkName
+      });
+      
       this.loggerService.error(
         `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`,
       );
@@ -214,15 +249,24 @@ export class ProverService implements OnModuleInit {
       if (witness) {
         validatorWitnesses.push(witness);
         processedValidators++;
+        
+        // Track processed validator
+        this.prometheus.validatorsProcessedCount.inc({
+          module_id: validator.moduleId.toString(),
+          processing_type: 'proof_generation'
+        });
       } else {
         skippedValidators++;
       }
     }
 
+    const processingDuration = Date.now() - groupStartTime;
+    stopGroupTimer();
+    
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Deadline slot group processing completed:` +
       `\n  Slot: ${deadlineSlot}` +
-      `\n  Processing time: ${Date.now() - groupStartTime}ms`,
+      `\n  Processing time: ${processingDuration}ms`,
     );
 
     return { validatorWitnesses, processedValidators, skippedValidators };
@@ -240,9 +284,27 @@ export class ProverService implements OnModuleInit {
   ): Promise<ValidatorWitness | null> {
     const validatorStartTime = Date.now();
     const validatorIndex = Number(validator.validatorIndex);
+    const moduleId = validator.moduleId.toString();
+    
+    // Track individual validator processing
+    const stopValidatorTimer = this.prometheus.validatorProcessingDuration.startTimer({
+      module_id: moduleId,
+      processing_type: 'eligibility_check'
+    });
+    
     const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
 
+    // Check if validator already exited
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
+      this.prometheus.exitAlreadyProcessedCount.inc({
+        module_id: moduleId
+      });
+      
+      this.prometheus.validatorsSkippedCount.inc({
+        module_id: moduleId,
+        reason: 'already_exited'
+      });
+      
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator already exited:` +
         `\n  Index: ${validatorIndex}` +
@@ -250,11 +312,23 @@ export class ProverService implements OnModuleInit {
         `\n  Current exit epoch: ${deadlineStateValidator.exitEpoch}` +
         `\n  Required exit epoch: ${exitDeadlineEpoch}`,
       );
+      
+      stopValidatorTimer();
       return null;
     }
-
+    
     const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
     if (proofSlotTimestamp < eligibleExitRequestTimestamp) {
+      this.prometheus.exitDeadlineFutureCount.inc({
+        module_id: moduleId
+      });
+      
+      this.prometheus.validatorsSkippedCount.inc({
+        module_id: moduleId,
+        reason: 'not_eligible_yet'
+      });
+      
+      stopValidatorTimer();
       return null;
     }
 
@@ -276,17 +350,44 @@ export class ProverService implements OnModuleInit {
       validator.validatorPubkey,
       secondsSinceExitIsEligible,
     );
+    
+    // Track penalty application result
+    this.prometheus.validatorsPenaltyApplicableCount.inc({
+      module_id: moduleId,
+      applicable: isPenaltyApplicable ? 'yes' : 'no'
+    });
 
     if (!isPenaltyApplicable) {
+      this.prometheus.validatorsSkippedCount.inc({
+        module_id: moduleId,
+        reason: 'penalty_not_applicable'
+      });
+      
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
         `\n  Index: ${validatorIndex}` +
         `\n  Public key: ${validator.validatorPubkey}`,
       );
+      
+      stopValidatorTimer();
       return null;
     }
 
+    // Track proof generation
+    const stopProofGeneration = this.prometheus.proofGenerationDuration.startTimer({
+      proof_type: 'validator',
+      slot_type: 'current'
+    });
+    
     const proof = generateValidatorProof(stateView, validatorIndex);
+    stopProofGeneration();
+    
+    this.prometheus.proofGenerationCount.inc({
+      proof_type: 'validator',
+      slot_type: 'current',
+      status: 'success'
+    });
+    
     let withdrawableEpoch = deadlineStateValidator.withdrawableEpoch;
     if (withdrawableEpoch == Infinity) {
       withdrawableEpoch = this.FAR_FUTURE_EPOCH;
@@ -306,6 +407,8 @@ export class ProverService implements OnModuleInit {
       pubkey: validator.validatorPubkey,
     };
 
+    stopValidatorTimer();
+    
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Added validator ${validatorIndex} to witnesses`);
     return witness;
   }

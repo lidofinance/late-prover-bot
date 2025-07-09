@@ -1,12 +1,34 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
 import { join } from 'path';
-
-import { ConfigService } from '../config/config.service';
 import { Execution } from '../providers/execution/execution';
 import { LidoLocatorContract } from './lido-locator.service';
 import { NodeOperatorsRegistryContract } from './nor.service';
-import { StakingModule, StakingModuleContractWrapper } from './types';
+import { PrometheusService } from '../prometheus/prometheus.service';
+
+export interface StakingModule {
+  id: number;
+  stakingModuleAddress: string;
+  stakingModuleFee: number;
+  treasuryFee: number;
+  targetShare: number;
+  status: number;
+  name: string;
+  lastDepositAt: number;
+  lastDepositBlock: number;
+  exitedValidatorsCount: number;
+}
+
+export interface NodeOperatorSummary {
+  isTargetLimitActive: boolean;
+  targetValidatorsCount: number;
+  stuckValidatorsCount: number;
+  refundedValidatorsCount: number;
+  stuckPenaltyEndTimestamp: number;
+  totalExitedValidators: number;
+  totalDepositedValidators: number;
+  depositsCount: number;
+}
 
 @Injectable()
 export class StakingRouterContract implements OnModuleInit {
@@ -16,10 +38,10 @@ export class StakingRouterContract implements OnModuleInit {
   private stakingModuleContracts: Map<number, NodeOperatorsRegistryContract> = new Map();
 
   constructor(
-    protected readonly config: ConfigService,
     protected readonly execution: Execution,
     protected readonly lidoLocator: LidoLocatorContract,
-  ) {}
+    protected readonly prometheus: PrometheusService,
+  ) { }
 
   async onModuleInit(): Promise<void> {
     try {
@@ -27,13 +49,14 @@ export class StakingRouterContract implements OnModuleInit {
       this.stakingRouterAddress = await this.lidoLocator.getStakingRouter();
       this.logger.log(`StakingRouter address from LidoLocator: ${this.stakingRouterAddress}`);
 
-      // Import the full ABI JSON
       const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'staking-router.json'));
-
-      // Create interface from the ABI
       const iface = new ethers.utils.Interface(contractJson);
 
-      this.contract = new ethers.Contract(this.stakingRouterAddress, iface, this.execution.provider);
+      this.contract = new ethers.Contract(
+        this.stakingRouterAddress,
+        iface,
+        this.execution.provider,
+      );
 
       this.logger.log('StakingRouter contract initialized successfully');
 
@@ -41,44 +64,38 @@ export class StakingRouterContract implements OnModuleInit {
       await this.loadStakingModuleContracts();
       this.logger.log('StakingRouter module initialization completed');
     } catch (error) {
-      this.logger.error('Failed to initialize StakingRouter contract:', error.message);
+      this.logger.error('Failed to initialize StakingRouterContract:', error.message);
       throw error;
     }
   }
 
-  private async ensureContract(): Promise<void> {
-    if (!this.contract) {
-      const address = await this.lidoLocator.getStakingRouter();
-      
-      const abi = [
-        'function getStakingModules() view returns (tuple(uint24 id, address stakingModuleAddress, uint16 stakingModuleFee, uint16 treasuryFee, uint16 targetShare, uint8 status, string name, uint64 lastDepositAt, uint256 lastDepositBlock, uint256 exitedValidatorsCount, uint256 totalValidatorsCount, uint256 totalDepositedValidators, uint256 totalDepositsValue)[])',
-      ];
-
-      this.contract = new ethers.Contract(address, abi, this.execution.provider);
-      this.logger.log(`StakingRouter contract initialized at ${address}`);
-    }
-  }
-
-  /**
-   * Get all staking modules from the StakingRouter contract
-   * @returns Array of staking modules with their details
-   */
   public async getStakingModules(): Promise<StakingModule[]> {
     try {
-      await this.ensureContract();
+      const modules = await this.contract.getStakingModules();
       
-      const result = await this.contract.getStakingModules();
-      
-      const stakingModules: StakingModule[] = result.map((module: any) => ({
+      const results: StakingModule[] = modules.map((module: any) => ({
         id: module.id,
         stakingModuleAddress: module.stakingModuleAddress,
         name: module.name,
       }));
 
-      this.logger.log(`Retrieved ${stakingModules.length} staking modules`);
-      return stakingModules;
+      this.prometheus.stakingModuleOperationsCount.inc({
+        module_id: 'all',
+        operation_type: 'getStakingModules',
+        status: 'success'
+      });
+
+      this.logger.debug(`Successfully loaded ${results.length} staking modules`);
+      return results;
+
     } catch (error) {
-      this.logger.error('Failed to get staking modules', error);
+      this.prometheus.stakingModuleOperationsCount.inc({
+        module_id: 'all',
+        operation_type: 'getStakingModules',
+        status: 'error'
+      });
+      
+      this.logger.error('Failed to get staking modules:', error);
       throw error;
     }
   }
