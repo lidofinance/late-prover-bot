@@ -16,7 +16,6 @@ import {
   METRIC_TASK_DURATION_SECONDS,
   METRIC_TASK_RESULT_COUNT,
   METRIC_TRANSACTION_COUNTER,
-  // NEW METRICS IMPORTS
   METRIC_PROOF_GENERATION_DURATION_SECONDS,
   METRIC_PROOF_GENERATION_COUNT,
   METRIC_HISTORICAL_PROOF_GENERATION_COUNT,
@@ -56,7 +55,6 @@ import {
   METRIC_BEACON_HEADER_FETCH_ERRORS_COUNT,
   METRIC_CONTRACT_CALL_ERRORS_COUNT,
 } from './prometheus.constants';
-import { ConfigService } from '../config/config.service';
 
 // Re-export from decorators for backward compatibility
 export { RequestStatus, TaskStatus, requestLabels } from './decorators';
@@ -67,7 +65,6 @@ export class PrometheusService {
 
   constructor(
     @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
-    private config: ConfigService,
   ) {}
 
   public getOrCreateMetric<T extends Metrics, L extends string>(type: T, options: Options<L>): Metric<T, L> {

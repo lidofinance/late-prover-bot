@@ -1,166 +1,269 @@
+# Late Proof Verifier Bot
+
 ## Description
 
-Tool for reporting Slashings and Withdrawals for Lido Community Staking Module
+**Tool for generating proofs for delayed validator exits** in the Lido ecosystem. This bot monitors validator exit requests and generates cryptographic proofs when validators fail to exit by their required deadline, enabling penalty enforcement on node operators.
 
-### Daemon working mode
+## Overview
 
-The tool is a daemon that listens to the CL and reports any slashings and withdrawals to the Lido Community Staking Module.
+The Late Proof Verifier Bot is a critical component of Lido's validator exit delay monitoring system. It:
+
+- **Monitors beacon chain** for validator exit requests
+- **Detects delayed exits** when validators haven't exited by their deadline
+- **Generates proofs** using Merkle tree cryptography for delayed validator exits
+- **Submits verification** to the ValidatorExitDelayVerifier contract
+- **Enables penalty enforcement** on node operators whose validators are delayed
+
+## How It Works
+
+### Daemon Mode (Default)
+
+The bot runs as a daemon that continuously processes beacon chain roots:
 
 <details>
   <summary>The algorithm is as follows</summary>
 
+1. **Get finalized beacon chain root**
+   - Fetches the latest finalized beacon chain header
+   - Determines the previous root to process (from storage, START_ROOT, or parent root)
 
-0. Get the current CL finalized head.
-1. Get the current validator set of the CS Module.
-   > It is necessary at the first startup. All subsequent runs of the indexer will be performed when necessary and independently of the main processing
-2. Choose the next block service to process.
-   > The provider chooses the next root with the following priority:
-   > - Return the root from roots stack if exists and keys indexer is healthy enough to be trusted completely to process this root
-   > - *When no any processed roots yet* Return `START_ROOT` or the last finalized root if `START_ROOT` is not set
-   > - Return a finalized child root of the last processed root
-   > - Sleep 12s if nothing to process and **return to the step 0**
-3. Process the root.
-   > The processor does the following:
-   > - Get the block info from CL by the root
-   > - If the current state of keys indexer is outdated (~15-27h behind from the block) to be trusted completely, add the block root to roots stack
-   > - If the block has a withdrawal, report it to the CS Module
-   > - If the current state of keys indexer is healthy enough to be trusted completely, remove the root from roots stack
-4. Build and send proofs to the CS Module contract if withdrawal was found.
+2. **Process block range**
+   - Processes execution layer blocks between previous and current beacon chain roots
+   - Discovers validator exit requests from ValidatorsExitBusOracle events
 
-So, according to the algorithm, there are the following statements:
-1. We always go sequentially by the finalized roots of blocks, taking the next one by the root of the previous one. In this way, we avoid missing any blocks.
-2. If for some reason the daemon crashes, it will start from the last root running before the crash when it is launched
-3. If for some reason KeysAPI crashed or CL node stopped giving validators, we can use the previously successfully received data to guarantee that our slashings will report for another ~15h and withdrawals for ~27h (because of the new validators appearing time and `MIN_VALIDATOR_WITHDRAWABILITY_DELAY`)
-   If any of these time thresholds are breached, we cannot guarantee the correct key ownership determination. That's why we put the root block in the stack just in case, to process it again later when KeysAPI and CL node are well.
+3. **Group validators by deadline**
+   - Analyzes exit requests and groups validators by their exit deadline slots
+   - Calculates when each validator should have exited based on activation time
+
+4. **Generate proofs for delayed exits**
+   - For each validator past its deadline, generates a Merkle proof of its current state
+   - Supports both current slot verification and historical slot verification using historical summaries
+
+5. **Submit to verifier contract**
+   - Calls `verifyValidatorExitDelay()` or `verifyHistoricalValidatorExitDelay()`
+   - Enables penalty application on node operators with delayed validators
+
+6. **Store progress and repeat**
+   - Saves the last processed root to storage
+   - Sleeps for 5 minutes and repeats the process
+
+**Key Features:**
+- **Sequential processing**: Processes beacon chain roots sequentially to avoid missing blocks
+- **Crash recovery**: Resumes from the last processed root after restart
+- **Historical verification**: Can generate proofs for older slots using historical summaries
+- **Batch processing**: Efficiently handles multiple validators per transaction
+- **Comprehensive monitoring**: Tracks processing via Prometheus metrics
 
 </details>
 
-#### How to run
+## Getting Started
 
-1. Copy `.env.example` to `.env` and fill in the necessary fields
+### Prerequisites
 
+- Node.js 16+
+- Access to Ethereum execution layer RPC
+- Access to Ethereum consensus layer API
+- Private key for transaction signing (if not in dry-run mode)
+
+### Installation
+
+1. **Clone and install dependencies**
    ```bash
-   $ cp .env.example .env
-   ```
-2. Run the daemon:
-
-   a. Using the docker compose
-
-   ```bash
-   $ docker-compose up -d daemon
-   ```
-
-   b. Or using yarn
-    
-   ```bash
-   $ yarn install
-   $ yarn run typechain
-   $ yarn build
-   $ yarn run start:prod
+   git clone https://github.com/lidofinance/late-prover-bot.git
+   cd late-prover-bot
+   yarn install
    ```
 
-### CLI working mode
-
-#### How to run
-
-1. Copy `.env.example` to `.env` and fill in the necessary fields
-
+2. **Generate contract types**
    ```bash
-   $ cp .env.example .env
+   yarn run typechain
    ```
 
-2. Run the CLI:
-
-   a. Using the docker compose
-
+3. **Build the project**
    ```bash
-   # Report withdrawal
-   $ docker compose run -it --rm withdrawal
+   yarn build
    ```
 
-   b. Or using yarn
+### Configuration
 
+1. **Create environment file**
    ```bash
-   $ yarn install
-   $ yarn run typechain
-   $ yarn build
-   # Report withdrawal
-   $ yarn withdrawal
+   cp .env.example .env
    ```
 
-#### Options to run CLI
+2. **Fill in the required variables** (see Environment Variables section below)
 
-`--node-operator-id ` - Node operator ID
+### Running the Bot
 
-`--key-index` - Key index in the CSM module according to Node Operator
-
-`--validator-index` - Validator index in the Consensus Layer
-
-`--block` - Block number (slot or root of block on the Consensus Layer which contains the validator withdrawal)
-
-`--help` - Show help
-
-## Environment variables
-
-| Name                                    | Description                                       | Required               | Default                  |
-|-----------------------------------------|---------------------------------------------------|------------------------|--------------------------|
-| WORKING_MODE                            | Working mode of the tool (daemon or cli)          | no                     | daemon                   |
-| DRY_RUN                                 | Dry run mode                                      | no                     | false                    |
-| EL_PRC_URLS                             | Comma-separated list of EL RPC URLs               | yes                    |                          |
-| EL_RPC_RETRY_DELAY_MS                   | Delay between EL RPC retries in milliseconds      | no                     | 500                      |
-| EL_RPC_RESPONSE_TIMEOUT_MS              | EL RPC response timeout in milliseconds           | no                     | 60_000                   |
-| EL_RPC_MAX_RETRIES                      | Maximum number of EL RPC retries                  | no                     | 3                        |
-| CL_API_URLS                             | Comma-separated list of CL API URLs               | yes                    |                          |
-| CL_API_RETRY_DELAY_MS                   | Delay between CL API retries in milliseconds      | no                     | 500                      |
-| CL_API_RESPONSE_TIMEOUT_MS              | CL API response timeout in milliseconds           | no                     | 60_000                   |
-| CL_API_MAX_RETRIES                      | Maximum number of CL API retries                  | no                     | 3                        |
-| KEYSAPI_API_URLS                        | Comma-separated list of KeysAPI API URLs          | yes (daemon mode only) |                          |
-| KEYSAPI_API_RETRY_DELAY_MS              | Delay between KeysAPI API retries in milliseconds | no                     | 500                      |
-| KEYSAPI_API_RESPONSE_TIMEOUT_MS         | KeysAPI API response timeout in milliseconds      | no                     | 60_000                   |
-| KEYSAPI_API_MAX_RETRIES                 | Maximum number of KeysAPI API retries             | no                     | 3                        |
-| START_ROOT                              | Start consensus layer block root for the daemon   | no                     |                          |
-| CSM_ADDRESS                             | Address of the CSM contract                       | yes                    |                          |
-| NOR_ADDRESS                             | Address of the Node Operators Registry contract   | yes                    |                          |
-| VERIFIER_ADDRESS                        | Address of the verifier contract                  | yes                    |                          |
-| TX_SIGNER_PRIVATE_KEY                   | Private key of the transaction signer             | yes (if not dry run)   |                          |
-| TX_MIN_GAS_PRIORITY_FEES                | Minimum gas priority fees for the transaction     | no                     | 50_000_000 (0.05 gwei)   |
-| TX_MAX_GAS_PRIORITY_FEES                | Maximum gas priority fees for the transaction     | no                     | 10_000_000_000 (10 gwei) |
-| TX_GAS_PRIORITY_FEE_PERCENTILE          | Gas priority fee percentile for the transaction   | no                     | 25                       |
-| TX_GAS_FEE_HISTORY_DAYS                 | Days of gas fee history for analyzing gas         | no                     | 1                        |
-| TX_GAS_FEE_HISTORY_PERCENTILE           | Gas fee percentile for analyzing gas              | no                     | 50                       |
-| TX_GAS_LIMIT                            | Gas limit for the transaction                     | no                     | 1_000_000                |
-| TX_MINING_WAITING_TIMEOUT_MS            | Timeout for waiting for the transaction mining    | no                     | 3_600_000 (1 hour)       |
-| TX_CONFIRMATIONS                        | Number of confirmations for the transaction       | no                     | 1                        |
-| KEYS_INDEXER_RUNNING_PERIOD_MS          | Period of running keys indexer in milliseconds    | no                     | 3 * 3_600_000 (3 hours)  |
-| KEYS_INDEXER_KEYAPI_FRESHNESS_PERIOD_MS | Period of keys indexer freshness in milliseconds  | no                     | 8 * 3_600_000 (8 hours)  |
-| HTTP_PORT                               | Port for the HTTP server                          | no                     | 8080                     |
-| LOG_LEVEL                               | Log level                                         | no                     | info                     |
-| LOG_FORMAT                              | Log format                                        | no                     | simple                   |
-
-
-
-## Test
+#### Using Docker Compose (Recommended)
 
 ```bash
-# unit tests
-$ yarn run test
+# Start daemon with monitoring stack
+docker-compose up -d daemon prometheus
 
-# e2e daemon tests
-$ yarn run test-daemon
+# View logs
+docker-compose logs -f daemon
 
-# e2e cli tests
-$ yarn run test-cli
-
-# test coverage
-$ yarn run test:cov
+# Access metrics
+curl http://localhost:8081/metrics
 ```
 
-## Linter
+#### Using Yarn
 
 ```bash
-# check
-$ yarn run lint
+# Development mode
+NODE_OPTIONS=--max-old-space-size=8192 yarn run start:dev
 
-# fix
-$ yarn run lint:fix
+# Production mode
+yarn run start:prod
 ```
+
+## Environment Variables
+
+| Name | Description | Required | Default |
+|------|-------------|----------|---------|
+| **Core Settings** | | | |
+| `WORKING_MODE` | Working mode: `daemon` | no | `daemon` |
+| `HTTP_PORT` | Port for HTTP server (health/metrics) | no | `8080` |
+| `DRY_RUN` | Dry run mode (no transactions) | no | `false` |
+| `CHAIN_ID` | Ethereum chain ID (1=mainnet, 5=goerli, 17000=holesky) | yes | |
+| **Blockchain Connection** | | | |
+| `EL_RPC_URLS` | Comma-separated execution layer RPC URLs | yes | |
+| `EL_RPC_RETRY_DELAY_MS` | Delay between EL RPC retries | no | `500` |
+| `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout | no | `60000` |
+| `EL_RPC_MAX_RETRIES` | Maximum EL RPC retries | no | `3` |
+| `CL_API_URLS` | Comma-separated consensus layer API URLs | yes | |
+| `CL_API_RETRY_DELAY_MS` | Delay between CL API retries | no | `500` |
+| `CL_API_RESPONSE_TIMEOUT_MS` | CL API response timeout | no | `60000` |
+| `CL_API_MAX_RETRIES` | Maximum CL API retries | no | `3` |
+| **Contracts** | | | |
+| `LIDO_LOCATOR_ADDRESS` | Lido Locator contract address | yes | |
+| `TX_SIGNER_PRIVATE_KEY` | Private key for transaction signing | yes (if not dry run) | |
+| **Transaction Settings** | | | |
+| `TX_MIN_GAS_PRIORITY_FEE` | Minimum gas priority fee (wei) | no | `50000000` (0.05 gwei) |
+| `TX_MAX_GAS_PRIORITY_FEE` | Maximum gas priority fee (wei) | no | `10000000000` (10 gwei) |
+| `TX_GAS_PRIORITY_FEE_PERCENTILE` | Gas priority fee percentile | no | `25` |
+| `TX_GAS_FEE_HISTORY_DAYS` | Days of gas fee history | no | `1` |
+| `TX_GAS_FEE_HISTORY_PERCENTILE` | Gas fee history percentile | no | `50` |
+| `TX_GAS_LIMIT` | Gas limit for transactions | no | `1000000` |
+| `TX_MINING_WAITING_TIMEOUT_MS` | Transaction mining timeout | no | `3600000` (1 hour) |
+| `TX_CONFIRMATIONS` | Required confirmations | no | `1` |
+| **Startup Options** | | | |
+| `START_ROOT` | Start from specific beacon chain root | no | |
+| `START_SLOT` | Start from specific beacon chain slot | no | |
+| `START_EPOCH` | Start from specific beacon chain epoch | no | |
+| **Logging** | | | |
+| `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | no | `info` |
+| `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
+
+## Monitoring
+
+### Health Check
+
+```bash
+curl http://localhost:8081/health
+```
+
+### Prometheus Metrics
+
+The bot exposes comprehensive metrics at `/metrics` endpoint:
+
+```bash
+# View all metrics
+curl http://localhost:8081/metrics
+
+# View custom metrics
+curl http://localhost:8081/metrics | grep late_prover_bot
+```
+
+#### Key Metrics Categories
+
+- **Proof Generation**: Duration and success rates
+- **Validator Processing**: Processed, skipped, and eligible validators
+- **Contract Interactions**: Call duration and verification counts
+- **Block Processing**: Range processing and batch operations
+- **Memory Usage**: Heap usage and RSS memory
+- **Daemon Operations**: Cycle duration and sleep tracking
+- **Error Tracking**: Various error counters
+
+### Monitoring Stack
+
+The project includes a complete monitoring setup:
+
+```bash
+# Start with Prometheus
+docker-compose up -d daemon prometheus
+
+# Access Prometheus UI
+open http://localhost:9090
+
+# Uncomment Grafana in docker-compose.yml for dashboards
+# open http://localhost:8082 (admin/MYPASSWORT)
+```
+
+## Development
+
+### Building
+
+```bash
+# Build for production
+yarn build
+
+# Build and watch for changes
+yarn run start:dev
+```
+
+### Testing
+
+```bash
+# Unit tests
+yarn test
+
+# E2E daemon tests  
+yarn run test-daemon
+
+# Test coverage
+yarn run test:cov
+```
+
+### Linting
+
+```bash
+# Check code style
+yarn run lint
+
+# Fix code style issues
+yarn run lint:fix
+
+# Format code
+yarn run format
+```
+
+## Architecture
+
+### Core Components
+
+- **DaemonService**: Main orchestrator running the processing loop
+- **RootsProcessor**: Processes beacon chain roots and block ranges
+- **RootsProvider**: Provides next roots to process with crash recovery
+- **ProverService**: Generates Merkle proofs for delayed validator exits
+- **Contract Services**: Interact with Lido contracts (ValidatorExitDelayVerifier, StakingRouter, etc.)
+- **Consensus/Execution Providers**: Interface with beacon chain and execution layer
+
+### Data Flow
+
+1. **Root Discovery**: RootsProvider determines next beacon chain root to process
+2. **Block Range Processing**: RootsProcessor handles execution layer blocks
+3. **Exit Request Detection**: ProverService discovers exit requests from events
+4. **Validator Analysis**: Groups validators by deadline and checks exit status
+5. **Proof Generation**: Creates Merkle proofs for delayed validators
+6. **Contract Submission**: Submits proofs to ValidatorExitDelayVerifier contract
+7. **Progress Tracking**: Stores last processed root and updates metrics
+
+## License
+
+GPL-3.0
+
+## Support
+
+For issues and questions, please open an issue on the [GitHub repository](https://github.com/lidofinance/late-prover-bot).
