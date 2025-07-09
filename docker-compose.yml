@@ -63,32 +63,9 @@ services:
       - "${EXTERNAL_HTTP_PORT:-${HTTP_PORT:-8093}}:${HTTP_PORT:-8093}"
     volumes:
       - daemon:/app/storage/
-    #depends_on:
-    #  - prometheus
-
-  #
-  # CLI tools
-  #
-  #withdrawal:
-  #  build:
-  #    context: .
-  #    dockerfile: ./Dockerfile.cli
-  #  entrypoint:
-  #    - yarn
-  #    - withdrawal
-  #  container_name: prover-cli-withdrawal
-  #  restart: no
-  #  environment:
-  #    - DRY_RUN=${DRY_RUN:-false}
-  #    - CHAIN_ID=${CHAIN_ID}
-  #    - EL_RPC_URLS=${EL_RPC_URLS}
-  #    - CL_API_URLS=${CL_API_URLS}
-  #    - CSM_ADDRESS=${CSM_ADDRESS}
-  #    - VERIFIER_ADDRESS=${VERIFIER_ADDRESS}
-  #    - TX_SIGNER_PRIVATE_KEY=${TX_SIGNER_PRIVATE_KEY:-}
 
 
 volumes:
   daemon:
   #grafana:
-  #prometheus:
+  prometheus:

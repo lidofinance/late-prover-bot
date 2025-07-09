@@ -11,8 +11,6 @@ import {
   METRIC_OUTGOING_CL_REQUESTS_DURATION_SECONDS,
   METRIC_OUTGOING_EL_REQUESTS_COUNT,
   METRIC_OUTGOING_EL_REQUESTS_DURATION_SECONDS,
-  METRIC_OUTGOING_KEYSAPI_REQUESTS_COUNT,
-  METRIC_OUTGOING_KEYSAPI_REQUESTS_DURATION_SECONDS,
   METRIC_TASK_DURATION_SECONDS,
   METRIC_TASK_RESULT_COUNT,
   METRIC_TRANSACTION_COUNTER,
@@ -105,19 +103,6 @@ export class PrometheusService {
   public outgoingCLRequestsCount = this.getOrCreateMetric('Gauge', {
     name: METRIC_OUTGOING_CL_REQUESTS_COUNT,
     help: 'Count of outgoing consensus layer requests',
-    labelNames: ['name', 'target', 'status', 'code'] as const,
-  });
-
-  public outgoingKeysAPIRequestsDuration = this.getOrCreateMetric('Histogram', {
-    name: METRIC_OUTGOING_KEYSAPI_REQUESTS_DURATION_SECONDS,
-    help: 'Duration of outgoing KeysAPI requests',
-    buckets: [0.01, 0.1, 0.5, 1, 2, 5, 15, 30, 60],
-    labelNames: ['name', 'target'] as const,
-  });
-
-  public outgoingKeysAPIRequestsCount = this.getOrCreateMetric('Gauge', {
-    name: METRIC_OUTGOING_KEYSAPI_REQUESTS_COUNT,
-    help: 'Count of outgoing KeysAPI requests',
     labelNames: ['name', 'target', 'status', 'code'] as const,
   });
 

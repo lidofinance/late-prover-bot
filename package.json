@@ -7,10 +7,6 @@
   "private": true,
   "license": "GPL-3.0",
   "scripts": {
-    "prove": "WORKING_MODE=cli node dist/main prove",
-    "prove:debug": "WORKING_MODE=cli node --inspect dist/main prove",
-    "withdrawal": "yarn prove withdrawal",
-    "withdrawal:debug": "yarn prove:debug withdrawal",
     "typechain": "typechain --target=ethers-v5 --out-dir src/common/contracts/types src/common/contracts/abi/*.json",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -22,7 +18,6 @@
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test-daemon": "NODE_OPTIONS=\"$NODE_OPTIONS --experimental-vm-modules\" jest --config test/jest-daemon-e2e.json",
-    "test-cli": "WORKING_MODE=cli NODE_OPTIONS=\"$NODE_OPTIONS --experimental-vm-modules\" jest --config test/jest-cli-e2e.json"
   },
   "dependencies": {
     "@huanshiwushuang/lowdb": "^6.0.2",

@@ -10,8 +10,6 @@ export const METRIC_OUTGOING_EL_REQUESTS_DURATION_SECONDS = `outgoing_el_request
 export const METRIC_OUTGOING_EL_REQUESTS_COUNT = `outgoing_el_requests_count`;
 export const METRIC_OUTGOING_CL_REQUESTS_DURATION_SECONDS = `outgoing_cl_requests_duration_seconds`;
 export const METRIC_OUTGOING_CL_REQUESTS_COUNT = `outgoing_cl_requests_count`;
-export const METRIC_OUTGOING_KEYSAPI_REQUESTS_DURATION_SECONDS = `outgoing_keysapi_requests_duration_seconds`;
-export const METRIC_OUTGOING_KEYSAPI_REQUESTS_COUNT = `outgoing_keysapi_requests_count`;
 export const METRIC_TASK_DURATION_SECONDS = `task_duration_seconds`;
 export const METRIC_TASK_RESULT_COUNT = `task_result_count`;
 
@@ -20,12 +18,6 @@ export const METRIC_TRANSACTION_COUNTER = `transaction_total`;
 
 export const METRIC_DATA_ACTUALITY = `data_actuality`;
 export const METRIC_LAST_PROCESSED_SLOT_NUMBER = `last_processed_slot_number`;
-export const METRIC_ROOTS_STACK_SIZE = `roots_stack_size`;
-export const METRIC_ROOTS_STACK_OLDEST_SLOT = `roots_stack_oldest_slot`;
-
-export const METRIC_KEYS_INDEXER_STORAGE_STATE_SLOT = `keys_indexer_storage_state_slot`;
-export const METRIC_KEYS_INDEXER_ALL_VALIDATORS_COUNT = `keys_indexer_all_validators_count`;
-export const METRIC_KEYS_CSM_VALIDATORS_COUNT = `keys_csm_validators_count`;
 
 // Proof Generation Metrics
 export const METRIC_PROOF_GENERATION_DURATION_SECONDS = `proof_generation_duration_seconds`;
