@@ -145,7 +145,11 @@ yarn run start:prod
 | `TX_GAS_PRIORITY_FEE_PERCENTILE` | Gas priority fee percentile | no | `25` |
 | `TX_GAS_FEE_HISTORY_DAYS` | Days of gas fee history | no | `1` |
 | `TX_GAS_FEE_HISTORY_PERCENTILE` | Gas fee history percentile | no | `50` |
-| `TX_GAS_LIMIT` | Gas limit for transactions | no | `1000000` |
+| `TX_GAS_LIMIT` | Gas limit for transactions | no | `2000000` |
+| `TX_GAS_MULTIPLIER` | Gas multiplier for retry attempts | no | `2` |
+| `TX_SKIP_GAS_ESTIMATION` | Skip gas estimation and use fixed limit | no | `false` |
+| `VALIDATOR_BATCH_SIZE` | Maximum validators per transaction | no | `50` |
+| `MAX_TRANSACTION_SIZE_BYTES` | Maximum transaction size in bytes | no | `100000` |
 | `TX_MINING_WAITING_TIMEOUT_MS` | Transaction mining timeout | no | `3600000` (1 hour) |
 | `TX_CONFIRMATIONS` | Required confirmations | no | `1` |
 | **Startup Options** | | | |
@@ -163,6 +167,54 @@ yarn run start:prod
 ```bash
 curl http://localhost:8081/health
 ```
+
+## Troubleshooting
+
+### Gas-Related Errors
+
+#### UNPREDICTABLE_GAS_LIMIT Error
+If you encounter `UNPREDICTABLE_GAS_LIMIT` errors:
+
+1. **Increase gas limit**: Set `TX_GAS_LIMIT=2500000` (or higher)
+2. **Skip gas estimation**: Set `TX_SKIP_GAS_ESTIMATION=true` to use fixed gas limits
+3. **Adjust retry multiplier**: Set `TX_GAS_MULTIPLIER=3` for higher retry gas limits
+4. **Check contract state**: Ensure your validators and exit requests are valid
+5. **Network issues**: Verify your RPC endpoints are stable and responsive
+
+#### Intrinsic Gas Too Low Error
+If you see "intrinsic gas too low: gas X, minimum needed Y":
+
+1. **Set higher gas limit**: Use the "minimum needed" value + 20% buffer
+   ```bash
+   # If error shows "minimum needed 1588836"
+   TX_GAS_LIMIT=1906600  # 1588836 * 1.2
+   ```
+2. **Enable dynamic estimation**: Set `TX_SKIP_GAS_ESTIMATION=false` (default)
+3. **Check batch size**: Larger batches need more gas - consider reducing `VALIDATOR_BATCH_SIZE`
+
+#### Gas Limit Guidelines by Batch Size
+- **1-10 validators**: `TX_GAS_LIMIT=1000000`
+- **11-25 validators**: `TX_GAS_LIMIT=1500000` 
+- **26-50 validators**: `TX_GAS_LIMIT=2000000`
+- **51+ validators**: `TX_GAS_LIMIT=2500000+` or reduce batch size
+
+### Oversized Transaction Error
+
+If you encounter "oversized data" or "transaction size limit exceeded" errors:
+
+1. **Reduce batch size**: Set `VALIDATOR_BATCH_SIZE=25` (or lower)
+2. **Set size limit**: Adjust `MAX_TRANSACTION_SIZE_BYTES=50000` for stricter limits
+3. **Monitor logs**: Check how many validators are being processed per batch
+4. **RPC provider limits**: Some providers have stricter size limits (Alchemy: 128KB, Infura: varies)
+
+Example configuration for large validator sets:
+```bash
+VALIDATOR_BATCH_SIZE=20
+MAX_TRANSACTION_SIZE_BYTES=80000
+TX_GAS_LIMIT=2500000
+```
+
+The application automatically splits large validator groups into smaller batches to prevent oversized transactions and provides detailed batch processing logs.
 
 ### Prometheus Metrics
 

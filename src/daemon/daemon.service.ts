@@ -46,7 +46,7 @@ export class DaemonService implements OnModuleInit {
       try {
         await this.baseRun();
       } catch (error) {
-        this.logger.error('Error in daemon loop', error);
+        this.logger.error('Error in daemon loop', this.serializeError(error));
         
         // Track daemon sleep due to error
         this.prometheus.daemonSleepCount.inc({
@@ -130,10 +130,33 @@ export class DaemonService implements OnModuleInit {
       );
       
     } catch (error) {
-      this.logger.error('Failed to process roots', error);
+      this.logger.error('Failed to process roots', this.serializeError(error));
       throw error;
     } finally {
       stopRootsProcessorTimer();
+    }
+  }
+
+  private serializeError(err: unknown): string {
+    if (err instanceof Error) {
+      return JSON.stringify(
+        {
+          name: err.name,
+          message: err.message,
+          stack: err.stack,
+          ...Object.getOwnPropertyNames(err).reduce(
+            (acc, key) => {
+              acc[key] = (err as any)[key];
+              return acc;
+            },
+            {} as Record<string, any>,
+          ),
+        },
+        null,
+        2,
+      );
+    } else {
+      return JSON.stringify(err, null, 2);
     }
   }
 }

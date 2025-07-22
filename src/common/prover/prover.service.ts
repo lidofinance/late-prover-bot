@@ -11,6 +11,7 @@ import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
 import { PrometheusService } from '../prometheus/prometheus.service';
 import { getSizeRangeCategory } from '../prometheus/decorators';
+import { ConfigService } from '../config/config.service';
 
 
 @Injectable()
@@ -39,6 +40,7 @@ export class ProverService implements OnModuleInit {
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
     protected readonly prometheus: PrometheusService,
+    protected readonly config: ConfigService,
   ) { }
 
   async onModuleInit(): Promise<void> {
@@ -366,7 +368,9 @@ export class ProverService implements OnModuleInit {
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
         `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}`,
+        `\n  Public key: ${validator.validatorPubkey}` +
+        `\n  Validator node operator: ${validator.nodeOpId}` +
+        `\n  Validator module: ${validator.moduleId}`,
       );
       
       stopValidatorTimer();
@@ -711,42 +715,81 @@ export class ProverService implements OnModuleInit {
     provableFinalizedBlockHeader: any,
     ssz: any
   ): Promise<void> {
-    const summaryIndex = this.calcSummaryIndex(deadlineSlot);
-    const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
-    const summarySlot = this.calcSlotOfSummary(summaryIndex);
-
-    const summaryState = await this.consensus.getState(summarySlot);
-    const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
-
-    // Generate proof that this block's root exists in the historical summaries
-    const proof = generateHistoricalStateProof(
-      finalizedStateView,
-      summaryStateView,
-      summaryIndex,
-      rootIndexInSummary,
+    // Split into batches to avoid oversized transactions
+    const batches = this.createValidatorBatches(validatorWitnesses);
+    
+    this.loggerService.log(
+      `Processing historical slot ${deadlineSlot} in ${batches.length} batches:` +
+      `\n  Total validators: ${validatorWitnesses.length}` +
+      `\n  Batch size: ${this.getValidatorBatchSize()}` +
+      `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
     );
 
-    const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchStartTime = Date.now();
+      
+      this.loggerService.log(
+        `Processing historical batch ${i + 1}/${batches.length}:` +
+        `\n  Slot: ${deadlineSlot}` +
+        `\n  Validators in batch: ${batch.length}`
+      );
 
-    // Create the historical header witness using the deadline block header
-    await this.verifier.verifyHistoricalValidatorExitDelay(
-      // beaconBlock
-      provableFinalizedBlockHeader,
-      // oldBlock
-      {
-        header: {
-          slot: Number(deadlineBlockHeader.header.message.slot),
-          proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-          parentRoot: deadlineBlockHeader.header.message.parent_root,
-          stateRoot: deadlineBlockHeader.header.message.state_root,
-          bodyRoot: deadlineBlockHeader.header.message.body_root,
-        },
-        rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
-        proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
-      },
-      validatorWitnesses,
-      exitRequest.exitRequestsData,
-    );
+      const summaryIndex = this.calcSummaryIndex(deadlineSlot);
+      const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
+      const summarySlot = this.calcSlotOfSummary(summaryIndex);
+
+      const summaryState = await this.consensus.getState(summarySlot);
+      const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+
+      // Generate proof that this block's root exists in the historical summaries
+      const proof = generateHistoricalStateProof(
+        finalizedStateView,
+        summaryStateView,
+        summaryIndex,
+        rootIndexInSummary,
+      );
+
+      const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
+
+      try {
+        // Create the historical header witness using the deadline block header
+        await this.verifier.verifyHistoricalValidatorExitDelay(
+          // beaconBlock
+          provableFinalizedBlockHeader,
+          // oldBlock
+          {
+            header: {
+              slot: Number(deadlineBlockHeader.header.message.slot),
+              proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
+              parentRoot: deadlineBlockHeader.header.message.parent_root,
+              stateRoot: deadlineBlockHeader.header.message.state_root,
+              bodyRoot: deadlineBlockHeader.header.message.body_root,
+            },
+            rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
+            proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
+          },
+          batch, // Process only this batch of validators
+          exitRequest.exitRequestsData,
+        );
+
+        this.loggerService.log(
+          `✅ Historical batch ${i + 1}/${batches.length} completed:` +
+          `\n  Slot: ${deadlineSlot}` +
+          `\n  Validators: ${batch.length}` +
+          `\n  Processing time: ${Date.now() - batchStartTime}ms`
+        );
+      } catch (error) {
+        this.loggerService.error(
+          `❌ Historical batch ${i + 1}/${batches.length} failed:` +
+          `\n  Slot: ${deadlineSlot}` +
+          `\n  Validators: ${batch.length}` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
+          this.serializeError(error)
+        );
+        throw error;
+      }
+    }
   }
 
   /**
@@ -759,23 +802,52 @@ export class ProverService implements OnModuleInit {
     fromBlock: number,
     toBlock: number
   ): Promise<void> {
+    // Split into batches to avoid oversized transactions
+    const batches = this.createValidatorBatches(validatorWitnesses);
+    
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Verifying validator exit delay:` +
-      `\n  Witnesses count: ${validatorWitnesses.length}` +
-      `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
+      `[Blocks ${fromBlock}-${toBlock}] Processing current slot in ${batches.length} batches:` +
+      `\n  Total validators: ${validatorWitnesses.length}` +
+      `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+      `\n  Batch size: ${this.getValidatorBatchSize()}` +
+      `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
     );
 
-    const verificationStartTime = Date.now();
-    await this.verifyValidatorGroup(
-      validatorWitnesses,
-      provableDeadlineBlockHeader,
-      exitRequest.exitRequestsData,
-    );
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchStartTime = Date.now();
+      
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}:` +
+        `\n  Validators in batch: ${batch.length}` +
+        `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`
+      );
 
-    this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Verification completed:` +
-      `\n  Verification time: ${Date.now() - verificationStartTime}ms`,
-    );
+      try {
+        const verificationStartTime = Date.now();
+        await this.verifyValidatorGroup(
+          batch, // Process only this batch of validators
+          provableDeadlineBlockHeader,
+          exitRequest.exitRequestsData,
+        );
+
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] ✅ Batch ${i + 1}/${batches.length} completed:` +
+          `\n  Validators: ${batch.length}` +
+          `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
+          `\n  Total batch time: ${Date.now() - batchStartTime}ms`
+        );
+      } catch (error) {
+        this.loggerService.error(
+          `[Blocks ${fromBlock}-${toBlock}] ❌ Batch ${i + 1}/${batches.length} failed:` +
+          `\n  Validators: ${batch.length}` +
+          `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
+          this.serializeError(error)
+        );
+        throw error;
+      }
+    }
   }
 
   /**
@@ -891,8 +963,8 @@ export class ProverService implements OnModuleInit {
       return JSON.stringify(
         {
           name: err.name,
-          message: err.message,
-          stack: err.stack,
+          //message: err.message,
+          //stack: err.stack,
           ...Object.getOwnPropertyNames(err).reduce(
             (acc, key) => {
               acc[key] = (err as any)[key];
@@ -1083,5 +1155,48 @@ export class ProverService implements OnModuleInit {
       this.loggerService.error(`Failed to determine if slot ${slot} is old: ${this.serializeError(error)}`);
       throw error;
     }
+  }
+
+  /**
+   * Split validator witnesses into smaller batches to avoid oversized transactions
+   */
+  private createValidatorBatches<T>(validators: T[]): T[][] {
+    const batchSize = this.getValidatorBatchSize();
+    const batches: T[][] = [];
+    
+    for (let i = 0; i < validators.length; i += batchSize) {
+      const batch = validators.slice(i, i + batchSize);
+      batches.push(batch);
+    }
+    
+    return batches;
+  }
+
+  /**
+   * Get the maximum number of validators to process in a single transaction
+   */
+  private getValidatorBatchSize(): number {
+    return this.config.get('VALIDATOR_BATCH_SIZE') || 50;
+  }
+
+  /**
+   * Get the maximum transaction size in bytes
+   */
+  private getMaxTransactionSizeBytes(): number {
+    return this.config.get('MAX_TRANSACTION_SIZE_BYTES') || 100_000;
+  }
+
+  /**
+   * Estimate the size of a validator witnesses array in bytes
+   */
+  private estimateValidatorWitnessesSize(validatorWitnesses: ValidatorWitness[]): number {
+    if (validatorWitnesses.length === 0) return 0;
+    
+    // Rough estimation based on typical ValidatorWitness structure
+    const sampleWitness = validatorWitnesses[0];
+    const sampleSize = JSON.stringify(sampleWitness).length;
+    
+    // Add some overhead for encoding and other transaction data
+    return validatorWitnesses.length * sampleSize * 1.5; // 50% overhead
   }
 }

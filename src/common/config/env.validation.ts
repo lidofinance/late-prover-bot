@@ -85,7 +85,23 @@ export class EnvironmentVariables {
 
   @IsNumber()
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public TX_GAS_LIMIT = 1_000_000;
+  public TX_GAS_LIMIT = 2_000_000; // Increased from 1M to 2M for validator proofs
+
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public TX_GAS_MULTIPLIER = 2; // Multiplier for retry attempts
+
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true', { toClassOnly: true })
+  public TX_SKIP_GAS_ESTIMATION = false; // Skip gas estimation and use fixed limit
+
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public VALIDATOR_BATCH_SIZE = 50; // Maximum validators per transaction
+
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public MAX_TRANSACTION_SIZE_BYTES = 100_000; // Maximum transaction size in bytes
 
   @IsNumber()
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
