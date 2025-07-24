@@ -76,6 +76,18 @@ export class VerifierContract implements OnModuleInit {
     return this.executeContractCall('verifyValidatorExitDelay', [beaconBlock, validatorWitnesses, exitRequests]);
   }
 
+  public async populateVerifyValidatorExitDelay(
+    beaconBlock: ProvableBeaconBlockHeader,
+    validatorWitnesses: ValidatorWitness[],
+    exitRequests: ExitRequestsData,
+  ): Promise<ethers.PopulatedTransaction> {
+    return await this.contractWithSigner.populateTransaction.verifyValidatorExitDelay(
+      beaconBlock,
+      validatorWitnesses,
+      exitRequests
+    );
+  }
+
   public async verifyHistoricalValidatorExitDelay(
     beaconBlock: ProvableBeaconBlockHeader,
     oldBlock: HistoricalHeaderWitness,
@@ -83,6 +95,20 @@ export class VerifierContract implements OnModuleInit {
     exitRequests: ExitRequestsData,
   ): Promise<ethers.ContractTransaction> {
     return this.executeContractCall('verifyHistoricalValidatorExitDelay', [beaconBlock, oldBlock, validatorWitnesses, exitRequests]);
+  }
+
+  public async populateVerifyHistoricalValidatorExitDelay(
+    beaconBlock: ProvableBeaconBlockHeader,
+    oldBlock: HistoricalHeaderWitness,
+    validatorWitnesses: ValidatorWitness[],
+    exitRequests: ExitRequestsData,
+  ): Promise<ethers.PopulatedTransaction> {
+    return await this.contractWithSigner.populateTransaction.verifyHistoricalValidatorExitDelay(
+      beaconBlock,
+      oldBlock,
+      validatorWitnesses,
+      exitRequests
+    );
   }
 
   /**

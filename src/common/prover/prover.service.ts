@@ -3,7 +3,7 @@ import { Inject, Injectable, LoggerService, OnModuleInit } from '@nestjs/common'
 import { ethers } from 'ethers';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
 import { StakingRouterContract } from '../contracts/staking-router.service';
-import { ProvableBeaconBlockHeader, ValidatorWitness } from '../contracts/types';
+import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
@@ -11,7 +11,6 @@ import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
 import { PrometheusService } from '../prometheus/prometheus.service';
 import { getSizeRangeCategory } from '../prometheus/decorators';
-import { ConfigService } from '../config/config.service';
 
 
 @Injectable()
@@ -40,7 +39,7 @@ export class ProverService implements OnModuleInit {
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
     protected readonly prometheus: PrometheusService,
-    protected readonly config: ConfigService,
+    @Inject('VALIDATOR_BATCH_SIZE') private readonly validatorBatchSize: number,
   ) { }
 
   async onModuleInit(): Promise<void> {
@@ -417,36 +416,6 @@ export class ProverService implements OnModuleInit {
     return witness;
   }
 
-  private async verifyValidatorGroup(
-    validatorWitnesses: ValidatorWitness[],
-    beaconBlock: ProvableBeaconBlockHeader,
-    exitRequestsData: any,
-  ): Promise<void> {
-    this.loggerService.debug?.(
-      'Beacon block:',
-      JSON.stringify(
-        {
-          header: {
-            slot: beaconBlock.header.slot.toString(),
-            proposerIndex: beaconBlock.header.proposerIndex.toString(),
-            parentRoot: beaconBlock.header.parentRoot,
-            stateRoot: beaconBlock.header.stateRoot,
-            bodyRoot: beaconBlock.header.bodyRoot,
-          },
-          rootsTimestamp: beaconBlock.rootsTimestamp.toString(),
-        },
-        null,
-        2,
-      ),
-    );
-
-    if (validatorWitnesses.length > 0) {
-      this.loggerService.debug?.('ValidatorWitnesses:', JSON.stringify(validatorWitnesses, null, 2));
-    }
-
-    await this.verifier.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequestsData);
-  }
-
   /**
    * Add validators from an exit request to the persistent storage
    * @param validatorsByDeadlineSlot Validators grouped by deadline slot from a single exit request
@@ -721,7 +690,7 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(
       `Processing historical slot ${deadlineSlot} in ${batches.length} batches:` +
       `\n  Total validators: ${validatorWitnesses.length}` +
-      `\n  Batch size: ${this.getValidatorBatchSize()}` +
+      `\n  Batch size: ${this.validatorBatchSize}` +
       `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
     );
 
@@ -752,25 +721,41 @@ export class ProverService implements OnModuleInit {
 
       const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
 
+      const oldBlock = {
+        header: {
+          slot: Number(deadlineBlockHeader.header.message.slot),
+          proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
+          parentRoot: deadlineBlockHeader.header.message.parent_root,
+          stateRoot: deadlineBlockHeader.header.message.state_root,
+          bodyRoot: deadlineBlockHeader.header.message.body_root,
+        },
+        rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
+        proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
+      };
+
       try {
-        // Create the historical header witness using the deadline block header
-        await this.verifier.verifyHistoricalValidatorExitDelay(
-          // beaconBlock
-          provableFinalizedBlockHeader,
-          // oldBlock
-          {
-            header: {
-              slot: Number(deadlineBlockHeader.header.message.slot),
-              proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-              parentRoot: deadlineBlockHeader.header.message.parent_root,
-              stateRoot: deadlineBlockHeader.header.message.state_root,
-              bodyRoot: deadlineBlockHeader.header.message.body_root,
-            },
-            rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
-            proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
+        // Use execution service for transaction handling
+        await this.execution.execute(
+          // Emulation callback
+          async (beaconBlock, oldBlock, validatorWitnesses, exitRequestsData) => {
+            return await this.verifier.verifyHistoricalValidatorExitDelay(
+              beaconBlock,
+              oldBlock,
+              validatorWitnesses,
+              exitRequestsData,
+            );
           },
-          batch, // Process only this batch of validators
-          exitRequest.exitRequestsData,
+          // Population callback  
+          async (beaconBlock, oldBlock, validatorWitnesses, exitRequestsData) => {
+            return await this.verifier.populateVerifyHistoricalValidatorExitDelay(
+              beaconBlock,
+              oldBlock,
+              validatorWitnesses,
+              exitRequestsData,
+            );
+          },
+          // Payload
+          [provableFinalizedBlockHeader, oldBlock, batch, exitRequest.exitRequestsData]
         );
 
         this.loggerService.log(
@@ -780,12 +765,13 @@ export class ProverService implements OnModuleInit {
           `\n  Processing time: ${Date.now() - batchStartTime}ms`
         );
       } catch (error) {
+        // Don't log full error details here - execution service has already logged them
+        // Just log a brief reference for this batch context
         this.loggerService.error(
           `❌ Historical batch ${i + 1}/${batches.length} failed:` +
           `\n  Slot: ${deadlineSlot}` +
           `\n  Validators: ${batch.length}` +
-          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
-          this.serializeError(error)
+          `\n  Error: ${this.getErrorReference(error)}`
         );
         throw error;
       }
@@ -809,7 +795,7 @@ export class ProverService implements OnModuleInit {
       `[Blocks ${fromBlock}-${toBlock}] Processing current slot in ${batches.length} batches:` +
       `\n  Total validators: ${validatorWitnesses.length}` +
       `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
-      `\n  Batch size: ${this.getValidatorBatchSize()}` +
+      `\n  Batch size: ${this.validatorBatchSize}` +
       `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
     );
 
@@ -825,10 +811,27 @@ export class ProverService implements OnModuleInit {
 
       try {
         const verificationStartTime = Date.now();
-        await this.verifyValidatorGroup(
-          batch, // Process only this batch of validators
-          provableDeadlineBlockHeader,
-          exitRequest.exitRequestsData,
+        
+        // Use execution service for transaction handling
+        await this.execution.execute(
+          // Emulation callback
+          async (beaconBlock, validatorWitnesses, exitRequestsData) => {
+            return await this.verifier.verifyValidatorExitDelay(
+              beaconBlock,
+              validatorWitnesses,
+              exitRequestsData,
+            );
+          },
+          // Population callback
+          async (beaconBlock, validatorWitnesses, exitRequestsData) => {
+            return await this.verifier.populateVerifyValidatorExitDelay(
+              beaconBlock,
+              validatorWitnesses,
+              exitRequestsData,
+            );
+          },
+          // Payload
+          [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData]
         );
 
         this.loggerService.log(
@@ -838,12 +841,13 @@ export class ProverService implements OnModuleInit {
           `\n  Total batch time: ${Date.now() - batchStartTime}ms`
         );
       } catch (error) {
+        // Don't log full error details here - execution service has already logged them
+        // Just log a brief reference for this batch context
         this.loggerService.error(
           `[Blocks ${fromBlock}-${toBlock}] ❌ Batch ${i + 1}/${batches.length} failed:` +
           `\n  Validators: ${batch.length}` +
           `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
-          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
-          this.serializeError(error)
+          `\n  Error: ${this.getErrorReference(error)}`
         );
         throw error;
       }
@@ -948,36 +952,13 @@ export class ProverService implements OnModuleInit {
         `\n  Total processing time: ${Date.now() - startTime}ms`,
       );
     } catch (error) {
+      // Brief error summary without full details (detailed errors already logged by lower layers)
       this.loggerService.error(
         `[Blocks ${fromBlock}-${toBlock}] Processing failed:` +
-        `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
-        `\n  Total time: ${Date.now() - startTime}ms`,
-        this.serializeError(error),
+        `\n  Error: ${this.getErrorReference(error)}` +
+        `\n  Total time: ${Date.now() - startTime}ms`
       );
       throw error;
-    }
-  }
-
-  private serializeError(err: unknown): string {
-    if (err instanceof Error) {
-      return JSON.stringify(
-        {
-          name: err.name,
-          //message: err.message,
-          //stack: err.stack,
-          ...Object.getOwnPropertyNames(err).reduce(
-            (acc, key) => {
-              acc[key] = (err as any)[key];
-              return acc;
-            },
-            {} as Record<string, any>,
-          ),
-        },
-        null,
-        2,
-      );
-    } else {
-      return JSON.stringify(err, null, 2);
     }
   }
 
@@ -1152,7 +1133,7 @@ export class ProverService implements OnModuleInit {
 
       return distance >= slotsPerHistoricalRoot;
     } catch (error) {
-      this.loggerService.error(`Failed to determine if slot ${slot} is old: ${this.serializeError(error)}`);
+      this.loggerService.error(`Failed to determine if slot ${slot} is old: ${this.getErrorReference(error)}`);
       throw error;
     }
   }
@@ -1161,7 +1142,7 @@ export class ProverService implements OnModuleInit {
    * Split validator witnesses into smaller batches to avoid oversized transactions
    */
   private createValidatorBatches<T>(validators: T[]): T[][] {
-    const batchSize = this.getValidatorBatchSize();
+    const batchSize = this.validatorBatchSize;
     const batches: T[][] = [];
     
     for (let i = 0; i < validators.length; i += batchSize) {
@@ -1173,30 +1154,24 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * Get the maximum number of validators to process in a single transaction
+   * Get a brief error reference without full details to avoid duplicate logging
    */
-  private getValidatorBatchSize(): number {
-    return this.config.get('VALIDATOR_BATCH_SIZE') || 50;
-  }
-
-  /**
-   * Get the maximum transaction size in bytes
-   */
-  private getMaxTransactionSizeBytes(): number {
-    return this.config.get('MAX_TRANSACTION_SIZE_BYTES') || 100_000;
-  }
-
-  /**
-   * Estimate the size of a validator witnesses array in bytes
-   */
-  private estimateValidatorWitnessesSize(validatorWitnesses: ValidatorWitness[]): number {
-    if (validatorWitnesses.length === 0) return 0;
+  private getErrorReference(error: any): string {
+    if (error instanceof Error) {
+      // Extract error ID if present, otherwise create short reference
+      const errorIdMatch = error.message.match(/\[ERR_\d+_[a-z0-9]+\]/);
+      if (errorIdMatch) {
+        return errorIdMatch[0]; // Return just the error ID
+      }
+      
+      // For errors without ID, return just the first 100 characters
+      const shortMessage = error.message.length > 100 
+        ? error.message.substring(0, 100) + '...'
+        : error.message;
+      return `${error.name}: ${shortMessage}`;
+    }
     
-    // Rough estimation based on typical ValidatorWitness structure
-    const sampleWitness = validatorWitnesses[0];
-    const sampleSize = JSON.stringify(sampleWitness).length;
-    
-    // Add some overhead for encoding and other transaction data
-    return validatorWitnesses.length * sampleSize * 1.5; // 50% overhead
+    const errorStr = String(error);
+    return errorStr.length > 100 ? errorStr.substring(0, 100) + '...' : errorStr;
   }
 }
