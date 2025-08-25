@@ -22,9 +22,10 @@ interface ExitRequestsResult {
 
 @Injectable()
 export class ExitRequestsContract implements OnModuleInit {
-  private contract: ethers.Contract;
+  private veboContract: ethers.Contract;
   private readonly logger = new Logger(ExitRequestsContract.name);
   private exitBusAddress: string;
+  private vebIface: ethers.utils.Interface;
 
   constructor(
     protected readonly execution: Execution,
@@ -39,14 +40,15 @@ export class ExitRequestsContract implements OnModuleInit {
       this.logger.log(`ValidatorsExitBusOracle address from LidoLocator: ${this.exitBusAddress}`);
 
       // Import the full ABI JSON
-      const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
-
+      const veboJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
+      const vebJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus.json'));
       // Create interface from the ABI
-      const iface = new ethers.utils.Interface(contractJson);
+      const veboIface = new ethers.utils.Interface(veboJson);
+      this.vebIface = new ethers.utils.Interface(vebJson);
 
-      this.contract = new ethers.Contract(
+      this.veboContract = new ethers.Contract(
         this.exitBusAddress,
-        iface,
+        veboIface,
         this.execution.provider,
       );
 
@@ -79,8 +81,8 @@ export class ExitRequestsContract implements OnModuleInit {
       this.logger.debug(`Fetching exit requests from block ${fromBlock} to ${toBlock}`);
 
       // Get all ExitDataProcessing events
-      const events = await this.contract.queryFilter(
-        this.contract.filters.ExitDataProcessing(),
+      const events = await this.veboContract.queryFilter(
+        this.veboContract.filters.ExitDataProcessing(),
         fromBlock,
         toBlock
       );
@@ -132,6 +134,13 @@ export class ExitRequestsContract implements OnModuleInit {
             continue;
           }
 
+          // Check if transaction was successful
+          const receipt = await this.execution.provider.getTransactionReceipt(txHash);
+          if (!receipt || receipt.status !== 1) {
+            this.logger.debug(`Skipping unsuccessful transaction ${txHash}, status: ${receipt?.status}`);
+            continue;
+          }
+
           // Get the exitRequestsHash from the event
           const exitRequestsHash = event.args?.exitRequestsHash;
           if (!exitRequestsHash) {
@@ -139,15 +148,65 @@ export class ExitRequestsContract implements OnModuleInit {
             continue;
           }
 
-          // Decode the submitReportData transaction
-          const decodedData = this.contract.interface.decodeFunctionData('submitReportData', tx.data);
+          // Decode the submitReportData or submitExitRequestsData transaction
+          let decodedData;
+          let decodeMethod = '';
+          try {
+            decodedData = this.veboContract.interface.decodeFunctionData('submitReportData', tx.data);
+            decodeMethod = 'submitReportData';
+          } catch (e1) {
+            try {
+              decodedData = this.vebIface.decodeFunctionData('submitExitRequestsData', tx.data);
+              decodeMethod = 'submitExitRequestsData';
+            } catch (e2) {
+              this.logger.error(`Failed to decode transaction data for ${txHash}:`, e1.message, e2.message);
+              continue;
+            }
+          }
 
-          // Log the decoded data to inspect its structure
-          const reportData = decodedData.data as ReportData;
+          // For submitExitRequestsData, the structure is different
+          let reportData: ReportData;
+          if (decodeMethod === 'submitExitRequestsData') {
+            // Access the request struct from decodedData
+            const requestStruct = decodedData.request || decodedData[0];
+            if (!requestStruct || !requestStruct.data) {
+              this.logger.error(
+                `Request struct from ${decodeMethod} is invalid or missing 'data' property: ` + JSON.stringify({
+                  txHash,
+                  decodeMethod,
+                  requestStruct,
+                  decodedDataKeys: Object.keys(decodedData)
+                }, null, 2)
+              );
+              continue;
+            }
+            reportData = {
+              consensusVersion: 0, // Not available in submitExitRequestsData
+              refSlot: 0, // Not available in submitExitRequestsData
+              requestsCount: 0, // Not available in submitExitRequestsData
+              dataFormat: requestStruct.dataFormat,
+              data: requestStruct.data
+            };
+          } else {
+            // For submitReportData, access data directly
+            if (!decodedData || typeof decodedData !== 'object' || !('data' in decodedData)) {
+              this.logger.error(
+                `Decoded data from ${decodeMethod} is invalid or missing 'data' property: ` + JSON.stringify({
+                  txHash,
+                  decodeMethod,
+                  txData: tx.data,
+                  decodedData,
+                  decodedDataKeys: decodedData && typeof decodedData === 'object' ? Object.keys(decodedData) : null
+                }, null, 2)
+              );
+              continue;
+            }
+            reportData = decodedData.data as ReportData;
+          }
 
           const exitRequestsData: ExitRequestsData = {
             data: reportData.data,
-            dataFormat: reportData.dataFormat.toNumber(), // This might be causing the issue
+            dataFormat: reportData.dataFormat.toNumber(),
           };
 
           results.push({
@@ -205,14 +264,14 @@ export class ExitRequestsContract implements OnModuleInit {
   public async getExitRequestDeliveryTimestamp(exitRequestsHash: string): Promise<number> {
     const startTime = Date.now();
     
-    // Track contract call for delivery timestamp
+    // Track veboContract call for delivery timestamp
     const stopContractTimer = this.prometheus.contractCallDuration.startTimer({
       contract_type: 'exit_bus',
       method: 'getDeliveryTimestamp'
     });
     
     try {
-      const timestamp = await this.contract.getDeliveryTimestamp(exitRequestsHash);
+      const timestamp = await this.veboContract.getDeliveryTimestamp(exitRequestsHash);
       
       this.prometheus.contractCallCount.inc({
         contract_type: 'exit_bus',

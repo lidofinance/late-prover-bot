@@ -317,7 +317,7 @@ export class ProverService implements OnModuleInit {
       stopValidatorTimer();
       return null;
     }
-    
+
     const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
     if (proofSlotTimestamp < eligibleExitRequestTimestamp) {
       this.prometheus.exitDeadlineFutureCount.inc({
@@ -508,38 +508,38 @@ export class ProverService implements OnModuleInit {
     fromBlock: number,
     toBlock: number
   ): Promise<void> {
-    const requestStartTime = Date.now();
+        const requestStartTime = Date.now();
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
-      `\n  Hash: ${exitRequest.exitRequestsHash}` +
+          `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
+          `\n  Hash: ${exitRequest.exitRequestsHash}` +
       `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
-    );
+        );
 
-    const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
+        const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
       exitRequest.exitRequestsHash,
     );
 
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
-      `\n  Validators count: ${validators.length}` +
+          `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
+          `\n  Validators count: ${validators.length}` +
       `\n  Delivery timestamp: ${deliveredTimestamp}` +
       `\n  Processing time: ${Date.now() - requestStartTime}ms`,
-    );
+        );
 
-    const groupingStartTime = Date.now();
-    const validatorsByDeadlineSlot = await this.groupValidatorsByDeadlineSlot(
-      validators,
+        const groupingStartTime = Date.now();
+        const validatorsByDeadlineSlot = await this.groupValidatorsByDeadlineSlot(
+          validators,
       deliveredTimestamp,
       finalizedStateView,
       exitRequest,
-      fromBlock,
+          fromBlock,
       toBlock,
-    );
+        );
 
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
-      `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
+          `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
+          `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
       `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
     );
 
@@ -627,7 +627,7 @@ export class ProverService implements OnModuleInit {
     const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
     const proofSlotTimestamp = this.consensus.slotToTimestamp(deadlineSlot);
     const provableDeadlineBlockHeader = {
-      header: {
+                header: {
         slot: Number(deadlineBlockHeader.header.message.slot),
         proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
         parentRoot: deadlineBlockHeader.header.message.parent_root,
@@ -654,7 +654,7 @@ export class ProverService implements OnModuleInit {
     if (isOldSlot) {
       await this.processHistoricalSlot(
         deadlineSlot,
-        validatorWitnesses,
+                validatorWitnesses,
         exitRequest,
         finalizedStateView,
         provableFinalizedBlockHeader,
@@ -665,9 +665,9 @@ export class ProverService implements OnModuleInit {
         validatorWitnesses,
         exitRequest,
         provableDeadlineBlockHeader,
-        fromBlock,
-        toBlock
-      );
+                fromBlock,
+                toBlock
+              );
     }
 
     return { processedValidators, skippedValidators };
@@ -704,8 +704,8 @@ export class ProverService implements OnModuleInit {
         `\n  Validators in batch: ${batch.length}`
       );
 
-      const summaryIndex = this.calcSummaryIndex(deadlineSlot);
-      const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
+              const summaryIndex = this.calcSummaryIndex(deadlineSlot);
+              const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
 
       const summaryState = await this.consensus.getState(summarySlot);
@@ -715,14 +715,14 @@ export class ProverService implements OnModuleInit {
       const proof = generateHistoricalStateProof(
         finalizedStateView,
         summaryStateView,
-        summaryIndex,
-        rootIndexInSummary,
-      );
+                summaryIndex,
+                rootIndexInSummary,
+              );
 
       const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
 
       const oldBlock = {
-        header: {
+                header: {
           slot: Number(deadlineBlockHeader.header.message.slot),
           proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
           parentRoot: deadlineBlockHeader.header.message.parent_root,
@@ -839,8 +839,8 @@ export class ProverService implements OnModuleInit {
           `\n  Validators: ${batch.length}` +
           `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
           `\n  Total batch time: ${Date.now() - batchStartTime}ms`
-        );
-      } catch (error) {
+      );
+    } catch (error) {
         // Don't log full error details here - execution service has already logged them
         // Just log a brief reference for this batch context
         this.loggerService.error(
@@ -848,9 +848,9 @@ export class ProverService implements OnModuleInit {
           `\n  Validators: ${batch.length}` +
           `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
           `\n  Error: ${this.getErrorReference(error)}`
-        );
-        throw error;
-      }
+      );
+      throw error;
+    }
     }
   }
 
@@ -885,10 +885,11 @@ export class ProverService implements OnModuleInit {
     let totalSkippedValidators = 0;
 
     for (const [deadlineSlot, groupDataArray] of eligibleEntries) {
+      const deadlineSlotPenalizable = deadlineSlot + 1;
       const { processedValidators, skippedValidators } = await this.processDeadlineSlot(
-        deadlineSlot,
+        deadlineSlotPenalizable,
         groupDataArray,
-        finalizedStateView,
+      finalizedStateView,
         provableFinalizedBlockHeader,
         ssz,
         fromBlock,
