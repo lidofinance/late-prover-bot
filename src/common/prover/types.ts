@@ -30,7 +30,6 @@ export type ProvableBeaconBlockHeader = {
 
 export type HistoricalHeaderWitness = {
   header: BeaconBlockHeader;
-  rootGIndex: string; // bytes32
   proof: string[]; // bytes32[]
 };
 

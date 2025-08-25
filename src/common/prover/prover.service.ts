@@ -729,7 +729,6 @@ export class ProverService implements OnModuleInit {
           stateRoot: deadlineBlockHeader.header.message.state_root,
           bodyRoot: deadlineBlockHeader.header.message.body_root,
         },
-        rootGIndex: '0x' + (proof.gindex.toString(16) + '00').padStart(64, '0'),
         proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
       };
 
