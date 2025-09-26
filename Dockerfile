@@ -1,4 +1,4 @@
-FROM node:24.4.1-alpine3.21 AS building
+FROM node:24.4.1-bookworm AS building
 
 WORKDIR /app
 
@@ -6,7 +6,7 @@ COPY package.json yarn.lock build-info.json ./
 COPY ./tsconfig*.json ./nest-cli.json ./.swcrc ./
 COPY ./src ./src
 
-RUN yarn install --frozen-lockfile --non-interactive && yarn cache clean && yarn typechain
+RUN yarn install --immutable && yarn cache clean && yarn typechain
 RUN yarn build
 
 FROM building AS production
