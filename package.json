@@ -50,6 +50,9 @@
     "undici": "^6.21.1",
     "winston": "^3.11.0"
   },
+  "resolutions": {
+    "@lodestar/params": "1.25.0"
+  },
   "devDependencies": {
     "@nestjs/cli": "^10.4.5",
     "@nestjs/schematics": "^10.0.0",
