@@ -10,8 +10,6 @@ import { ConfigService } from '../common/config/config.service';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
 
-// Run once every 5 minutes
-const SLEEP_TIME = 300000;
 
 @Injectable()
 export class DaemonService implements OnModuleInit {
@@ -53,7 +51,7 @@ export class DaemonService implements OnModuleInit {
           reason: 'error_recovery'
         });
         
-        await sleep(SLEEP_TIME);
+        await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
       } finally {
         stopCycleTimer();
         
@@ -94,7 +92,7 @@ export class DaemonService implements OnModuleInit {
         reason: 'no_new_roots'
       });
       
-      await sleep(SLEEP_TIME);
+      await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
       return;
     }
 
@@ -110,7 +108,7 @@ export class DaemonService implements OnModuleInit {
         reason: 'caught_up'
       });
       
-      await sleep(SLEEP_TIME);
+      await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
       return;
     }
 

@@ -95,8 +95,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     const { body, headers } = await this.retryRequest((baseUrl) =>
       this.baseGet(baseUrl, this.endpoints.blockInfo(blockId)),
     );
-    // const forkName = headers['eth-consensus-version'] as string;
-    const forkName = 'electra'
+    const forkName = this.getForkName(headers);
     if (!(forkName in SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
@@ -120,8 +119,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     );
     this.logger.log(`Getting state response for state id [${stateId}]`);
     const { body, headers } = await requestPromise;
-    //const forkName = headers['eth-consensus-version'] as string;
-    const forkName = 'electra'
+    const forkName = this.getForkName(headers);
     if (!(forkName in SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
@@ -136,5 +134,16 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     options?: RequestOptions,
   ): Promise<{ body: BodyReadable; headers: IncomingHttpHeaders }> {
     return super.baseGet(baseUrl, endpoint, options);
+  }
+
+  private getForkName(headers: IncomingHttpHeaders): string {
+    // Try to get fork name from headers first
+    const headerForkName = headers['eth-consensus-version'] as string;
+    if (headerForkName) {
+      return headerForkName;
+    }
+    
+    // Fallback to environment variable (defaults to 'electra')
+    return this.config.get('FORK_NAME') as string;
   }
 }
