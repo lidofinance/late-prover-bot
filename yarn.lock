@@ -1459,13 +1459,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@lodestar/params@npm:^1.25.0":
-  version: 1.26.0
-  resolution: "@lodestar/params@npm:1.26.0"
-  checksum: 10c0/3b80b6cacff75bf282ddd24ab987657a9ce66bea10e9a95e35b7cafcc88219cbf7edd1ee3e12fdfab5a01ee7194903ddc51e727c83ebfaee381cbd5414ba1bed
-  languageName: node
-  linkType: hard
-
 "@lodestar/types@npm:1.25.0":
   version: 1.25.0
   resolution: "@lodestar/types@npm:1.25.0"
