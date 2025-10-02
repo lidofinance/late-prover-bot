@@ -45,7 +45,7 @@ The bot runs as a daemon that continuously processes beacon chain roots:
 
 6. **Store progress and repeat**
    - Saves the last processed root to storage
-   - Sleeps for 5 minutes and repeats the process
+   - Sleeps for configured interval (default 5 minutes) and repeats the process
 
 **Key Features:**
 - **Sequential processing**: Processes beacon chain roots sequentially to avoid missing blocks
@@ -126,6 +126,7 @@ yarn run start:prod
 | `WORKING_MODE` | Working mode: `daemon` | no | `daemon` |
 | `HTTP_PORT` | Port for HTTP server (health/metrics) | no | `8080` |
 | `DRY_RUN` | Dry run mode (no transactions) | no | `false` |
+| `DAEMON_SLEEP_INTERVAL_MS` | Sleep interval between daemon cycles (milliseconds) | no | `300000` (5 minutes) |
 | `CHAIN_ID` | Ethereum chain ID (1=mainnet, 5=goerli, 17000=holesky) | yes | |
 | **Blockchain Connection** | | | |
 | `EL_RPC_URLS` | Comma-separated execution layer RPC URLs | yes | |
@@ -136,6 +137,7 @@ yarn run start:prod
 | `CL_API_RETRY_DELAY_MS` | Delay between CL API retries | no | `500` |
 | `CL_API_RESPONSE_TIMEOUT_MS` | CL API response timeout | no | `60000` |
 | `CL_API_MAX_RETRIES` | Maximum CL API retries | no | `3` |
+| `FORK_NAME` | Ethereum consensus layer fork name (fallback if not in headers) | no | `electra` |
 | **Contracts** | | | |
 | `LIDO_LOCATOR_ADDRESS` | Lido Locator contract address | yes | |
 | `TX_SIGNER_PRIVATE_KEY` | Private key for transaction signing | yes (if not dry run) | |

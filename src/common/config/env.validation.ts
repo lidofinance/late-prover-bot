@@ -179,7 +179,13 @@ export class EnvironmentVariables {
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public CL_API_MAX_RETRIES = 3;
 
+  @IsNumber()
+  @Min(10000) // Minimum 10 seconds
+  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
+  public DAEMON_SLEEP_INTERVAL_MS = 300000; // Default 5 minutes
 
+  @IsString()
+  public FORK_NAME: string = 'electra';
 }
 
 export function validate(config: Record<string, unknown>) {

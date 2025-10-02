@@ -13,7 +13,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "NODE_OPTIONS='--max-old-space-size=8192 --experimental-vm-modules' node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
@@ -49,6 +49,9 @@
     "typechain": "^8.3.2",
     "undici": "^6.21.1",
     "winston": "^3.11.0"
+  },
+  "resolutions": {
+    "@lodestar/params": "1.25.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.5",

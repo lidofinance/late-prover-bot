@@ -6,7 +6,6 @@ import { IncomingHttpHeaders } from 'undici/types/header';
 import BodyReadable from 'undici/types/readable';
 
 import { BeaconConfig, BlockHeaderResponse, BlockId, GenesisResponse, StateId } from './response.interface';
-import { ValidatorResponse } from './types';
 import { ConfigService } from '../../config/config.service';
 import { PrometheusService, TrackCLRequest } from '../../prometheus';
 import { BaseRestProvider } from '../base/rest-provider';
@@ -96,7 +95,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     const { body, headers } = await this.retryRequest((baseUrl) =>
       this.baseGet(baseUrl, this.endpoints.blockInfo(blockId)),
     );
-    const forkName = headers['eth-consensus-version'] as string;
+    const forkName = this.getForkName(headers);
     if (!(forkName in SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
@@ -120,22 +119,12 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     );
     this.logger.log(`Getting state response for state id [${stateId}]`);
     const { body, headers } = await requestPromise;
-    const forkName = headers['eth-consensus-version'] as string;
+    const forkName = this.getForkName(headers);
     if (!(forkName in SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const bodyBytes = await body.bytes();
     return { bodyBytes, forkName: forkName as keyof typeof SupportedFork };
-  }
-
-  public async getValidators(stateId: StateId): Promise<{ data: ValidatorResponse[] }> {
-    const { body } = await this.retryRequest((baseUrl) => this.baseGet(baseUrl, this.endpoints.validators(stateId)));
-    const response = (await body.json()) as { data: ValidatorResponse[] };
-    return response;
-  }
-
-  public getBaseUrl(): string {
-    return this.baseUrls[0]; // Always use the first URL for now
   }
 
   @TrackCLRequest()
@@ -145,5 +134,16 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     options?: RequestOptions,
   ): Promise<{ body: BodyReadable; headers: IncomingHttpHeaders }> {
     return super.baseGet(baseUrl, endpoint, options);
+  }
+
+  private getForkName(headers: IncomingHttpHeaders): string {
+    // Try to get fork name from headers first
+    const headerForkName = headers['eth-consensus-version'] as string;
+    if (headerForkName) {
+      return headerForkName;
+    }
+    
+    // Fallback to environment variable (defaults to 'electra')
+    return this.config.get('FORK_NAME') as string;
   }
 }
