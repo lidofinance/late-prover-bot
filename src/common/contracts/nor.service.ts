@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ethers } from 'ethers';
+
 import { Execution } from '../providers/execution/execution';
 
 @Injectable()
@@ -14,12 +15,8 @@ export class NodeOperatorsRegistryContract {
       'function isValidatorExitDelayPenaltyApplicable(uint256,uint256,bytes,uint256) view returns (bool)',
       'function exitDeadlineThreshold(uint256) view returns (uint256)',
     ];
-    
-    this.contract = new ethers.Contract(
-      address,
-      abi,
-      this.execution.provider,
-    );
+
+    this.contract = new ethers.Contract(address, abi, this.execution.provider);
   }
 
   /**

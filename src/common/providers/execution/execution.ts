@@ -73,7 +73,7 @@ class ErrorLogger {
     if (error instanceof ErrorWithContext) {
       errorId = error.errorId;
       message = error.message;
-      
+
       if (error.logged) {
         // Error already logged, just log reference
         this.logger.warn(`Error ${errorId} occurred again${context ? ` in ${context}` : ''}`);
@@ -93,10 +93,10 @@ class ErrorLogger {
     // Log the full error for the first time
     const truncatedMessage = this.truncateMessage(message);
     const errorDetails = this.serializeError(error);
-    
+
     this.logger.error(
       `[${errorId}] ${truncatedMessage}${context ? ` (${context})` : ''}`,
-      this.truncateErrorDetails(errorDetails)
+      this.truncateErrorDetails(errorDetails),
     );
 
     this.loggedErrors.add(errorId);
@@ -196,17 +196,17 @@ export class Execution {
     while (true) {
       try {
         this.prometheus?.transactionCount.inc({ status: TransactionStatus.pending });
-        
+
         const isDryRun = this.config.get('DRY_RUN');
         await this.executeTransaction(emulateTxCallback, populateTxCallback, payload);
-        
+
         // Track appropriate completion status
         if (isDryRun) {
           this.prometheus?.transactionCount.inc({ status: TransactionStatus.dry_run });
         } else {
           this.prometheus?.transactionCount.inc({ status: TransactionStatus.confirmed });
         }
-        
+
         return; // Successfully completed (either sent or dry run)
       } catch (error) {
         await this.handleExecutionError(error);
@@ -226,10 +226,10 @@ export class Execution {
     payload: any[],
   ): Promise<void> {
     this.logger.debug!(payload);
-    
+
     // Step 1: Build transaction
     const tx = await populateTxCallback(...payload);
-    let context: TransactionContext = { payload, tx };
+    const context: TransactionContext = { payload, tx };
 
     // Step 2: Emulate the call
     await this.emulateTransaction(emulateTxCallback, payload, context);
@@ -273,12 +273,9 @@ export class Execution {
     }
   }
 
-  private async prepareTransaction(
-    tx: PopulatedTransaction,
-    context: TransactionContext,
-  ): Promise<any> {
+  private async prepareTransaction(tx: PopulatedTransaction, context: TransactionContext): Promise<any> {
     const gasParameters = await this.calculateGasParameters();
-    
+
     const populated = await this.signer!.populateTransaction({
       ...tx,
       maxFeePerGas: gasParameters.maxFeePerGas,
@@ -290,10 +287,7 @@ export class Execution {
     return populated;
   }
 
-  private async validateTransactionConditions(
-    context: TransactionContext, 
-    populatedTx: any
-  ): Promise<boolean> {
+  private async validateTransactionConditions(context: TransactionContext, populatedTx: any): Promise<boolean> {
     // Handle dry run mode - log transaction details and return false (don't proceed)
     if (this.config.get('DRY_RUN')) {
       this.logDryRunTransaction(populatedTx);
@@ -311,34 +305,33 @@ export class Execution {
 
   private logDryRunTransaction(populatedTx: any): void {
     this.logger.log('🔍 DRY RUN MODE - Transaction prepared but not sent:');
-    
+
     // Try to identify the contract method being called
     let methodInfo = '';
     if (populatedTx.data && populatedTx.data.length > 10) {
       const methodSelector = populatedTx.data.substring(0, 10);
       methodInfo = `\n  Method Selector: ${methodSelector}`;
     }
-    
+
     this.logger.log(
       `📋 Transaction Details:` +
-      `\n  To: ${populatedTx.to || 'N/A'}` +
-      `\n  Value: ${populatedTx.value || '0'} ETH` +
-      `\n  Gas Limit: ${populatedTx.gasLimit}` +
-      `\n  Max Fee Per Gas: ${populatedTx.maxFeePerGas} (${utils.formatUnits(populatedTx.maxFeePerGas || 0, 'gwei')} Gwei)` +
-      `\n  Max Priority Fee: ${populatedTx.maxPriorityFeePerGas} (${utils.formatUnits(populatedTx.maxPriorityFeePerGas || 0, 'gwei')} Gwei)` +
-      `\n  Nonce: ${populatedTx.nonce}` +
-      `\n  Data Length: ${populatedTx.data ? populatedTx.data.length : 0} bytes` +
-      methodInfo +
-      `\n  Estimated Cost: ~${this.estimateTransactionCost(populatedTx)} ETH`
+        `\n  To: ${populatedTx.to || 'N/A'}` +
+        `\n  Value: ${populatedTx.value || '0'} ETH` +
+        `\n  Gas Limit: ${populatedTx.gasLimit}` +
+        `\n  Max Fee Per Gas: ${populatedTx.maxFeePerGas} (${utils.formatUnits(populatedTx.maxFeePerGas || 0, 'gwei')} Gwei)` +
+        `\n  Max Priority Fee: ${populatedTx.maxPriorityFeePerGas} (${utils.formatUnits(populatedTx.maxPriorityFeePerGas || 0, 'gwei')} Gwei)` +
+        `\n  Nonce: ${populatedTx.nonce}` +
+        `\n  Data Length: ${populatedTx.data ? populatedTx.data.length : 0} bytes` +
+        methodInfo +
+        `\n  Estimated Cost: ~${this.estimateTransactionCost(populatedTx)} ETH`,
     );
-    
+
     if (populatedTx.data && populatedTx.data.length > 2) {
-      const dataPreview = populatedTx.data.length > 200 
-        ? populatedTx.data.substring(0, 200) + '... [truncated]'
-        : populatedTx.data;
+      const dataPreview =
+        populatedTx.data.length > 200 ? populatedTx.data.substring(0, 200) + '... [truncated]' : populatedTx.data;
       this.logger.debug!(`📝 Transaction Data: ${dataPreview}`);
     }
-    
+
     this.logger.log('✅ DRY RUN completed successfully - no transaction sent');
     this.logger.log('💡 To send transactions, set DRY_RUN=false in your environment');
   }
@@ -347,24 +340,24 @@ export class Execution {
     if (!populatedTx.gasLimit || !populatedTx.maxFeePerGas) {
       return 'N/A';
     }
-    
+
     const gasLimit = BigInt(populatedTx.gasLimit);
     const maxFeePerGas = BigInt(populatedTx.maxFeePerGas);
     const maxCost = gasLimit * maxFeePerGas;
-    
+
     return utils.formatEther(maxCost.toString());
   }
 
   private async sendAndConfirmTransaction(populatedTx: any): Promise<void> {
     const signed = await this.signer!.signTransaction(populatedTx);
-    
+
     try {
       // Send transaction
       const submitted = await this.sendTransactionWithLogging(signed, populatedTx);
-      
+
       // Wait for confirmation
       await this.waitForConfirmation(submitted);
-      
+
       this.logger.log(`✅ Transaction succeeded! Hash: ${submitted.hash}`);
     } catch (error) {
       const errorId = this.errorLogger.logErrorOnce(error, 'transaction-submission');
@@ -372,28 +365,25 @@ export class Execution {
     }
   }
 
-  private async sendTransactionWithLogging(
-    signedTx: string,
-    populatedTx: any,
-  ): Promise<TransactionResponse> {
+  private async sendTransactionWithLogging(signedTx: string, populatedTx: any): Promise<TransactionResponse> {
     const submittedPromise = this.provider.sendTransaction(signedTx);
-    
+
     const logMessage = `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`;
     spinnerFor(submittedPromise, { text: logMessage });
-    
+
     const submitted = await submittedPromise;
     this.logger.log(`Transaction sent to mempool. Hash: ${submitted.hash}`);
-    
+
     return submitted;
   }
 
   private async waitForConfirmation(submitted: TransactionResponse): Promise<void> {
     const confirmations = this.config.get('TX_CONFIRMATIONS');
     const timeout = this.config.get('TX_MINING_WAITING_TIMEOUT_MS');
-    
+
     const waitingPromise = this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
     const logMessage = `Waiting until the transaction has been mined and confirmed ${confirmations} times`;
-    
+
     spinnerFor(waitingPromise, { text: logMessage });
     await waitingPromise;
   }
@@ -407,7 +397,7 @@ export class Execution {
       this.errorLogger.logErrorOnce(error, 'execution-validation');
       return; // Exit the retry loop
     }
-    
+
     if (error instanceof HighGasFeeError) {
       this.prometheus?.highGasFeeInterruptionsCount.inc();
       this.errorLogger.logErrorOnce(error, 'high-gas-fee');
@@ -415,11 +405,11 @@ export class Execution {
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
       return; // Continue the retry loop
     }
-    
+
     // For other errors, log once and re-throw
     this.prometheus?.transactionCount.inc({ status: TransactionStatus.error });
     const errorId = this.errorLogger.logErrorOnce(error, 'transaction-execution');
-    
+
     // Create a new error with reference to avoid re-logging the same details
     const referenceError = new Error(`Transaction execution failed [${errorId}]`);
     throw referenceError;
@@ -431,17 +421,17 @@ export class Execution {
 
   private async calculateGasParameters(): Promise<GasParameters> {
     this.logger.log('🔄 Calculating priority fee');
-    
+
     const { baseFeePerGas } = await this.provider.getBlock('pending');
     const feeHistory = await this.provider.getFeeHistory(1, 'latest', [
       this.config.get('TX_GAS_PRIORITY_FEE_PERCENTILE'),
     ]);
-    
+
     const maxPriorityFeePerGas = this.calculatePriorityFee(feeHistory.reward);
     const maxFeePerGas = BigInt(Number(baseFeePerGas)) * GAS_BUFFER_MULTIPLIER + maxPriorityFeePerGas;
-    
+
     this.logger.debug!(`Priority fee: ${maxPriorityFeePerGas} | Max fee: ${maxFeePerGas}`);
-    
+
     return { maxPriorityFeePerGas, maxFeePerGas };
   }
 
@@ -449,7 +439,7 @@ export class Execution {
     const rewardValue = rewards.pop()?.pop()?.toBigInt() ?? 0n;
     const minFee = BigInt(this.config.get('TX_MIN_GAS_PRIORITY_FEE'));
     const maxFee = BigInt(this.config.get('TX_MAX_GAS_PRIORITY_FEE'));
-    
+
     return bigIntMin(bigIntMax(rewardValue, minFee), maxFee);
   }
 
@@ -458,12 +448,12 @@ export class Execution {
     const currentGwei = utils.formatUnits(current, 'gwei');
     const recommendedGwei = utils.formatUnits(recommended, 'gwei');
     const info = `Current: ${currentGwei} Gwei | Recommended: ${recommendedGwei} Gwei`;
-    
+
     if (current > recommended) {
       this.logger.warn(`📛 Current gas fee is HIGH! ${info}`);
       return false;
     }
-    
+
     this.logger.log(`✅ Current gas fee is OK! ${info}`);
     return true;
   }
@@ -471,15 +461,12 @@ export class Execution {
   private async calculateGasFeeData(): Promise<GasFeeData> {
     const { baseFeePerGas: currentFee } = await this.provider.getBlock('pending');
     await this.updateGasFeeHistoryCache();
-    
-    const recommended = percentile(
-      this.gasFeeHistoryCache,
-      this.config.get('TX_GAS_FEE_HISTORY_PERCENTILE')
-    );
-    
+
+    const recommended = percentile(this.gasFeeHistoryCache, this.config.get('TX_GAS_FEE_HISTORY_PERCENTILE'));
+
     return {
       recommended,
-      current: currentFee?.toBigInt() ?? 0n
+      current: currentFee?.toBigInt() ?? 0n,
     };
   }
 
@@ -491,17 +478,17 @@ export class Execution {
     const maxFeeHistoryCacheSize = this.calculateMaxCacheSize();
     const { number: latestBlockNumber } = await this.provider.getBlock('latest');
     const blocksSinceLastUpdate = latestBlockNumber - this.lastFeeHistoryBlockNumber;
-    
+
     // Only update if enough blocks have passed
     if (blocksSinceLastUpdate < BLOCKS_PER_HOUR) {
       return;
     }
 
     this.logger.log('🔄 Updating gas fee history cache');
-    
+
     const blocksToFetch = Math.min(blocksSinceLastUpdate, maxFeeHistoryCacheSize);
     const newGasFees = await this.fetchGasFeeHistory(latestBlockNumber, blocksToFetch);
-    
+
     this.updateCacheWithNewFees(newGasFees);
     this.lastFeeHistoryBlockNumber = latestBlockNumber;
   }
@@ -513,21 +500,21 @@ export class Execution {
 
   private async fetchGasFeeHistory(latestBlockNumber: number, totalBlocksToFetch: number): Promise<bigint[]> {
     let newGasFees: bigint[] = [];
-    let blockCountPerRequest = MAX_BLOCKCOUNT;
+    const blockCountPerRequest = MAX_BLOCKCOUNT;
     let latestBlockToRequest = latestBlockNumber;
     let remainingBlocks = totalBlocksToFetch;
 
     while (remainingBlocks > 0) {
       const currentBatchSize = Math.min(remainingBlocks, blockCountPerRequest);
-      
+
       const stats = await this.provider.getFeeHistory(currentBatchSize, latestBlockToRequest, []);
-      
+
       // Remove the extra block (baseFeePerGas includes next block)
       stats.baseFeePerGas.pop();
-      
+
       const batchFees = stats.baseFeePerGas.map((fee) => fee.toBigInt());
       newGasFees = [...batchFees, ...newGasFees];
-      
+
       latestBlockToRequest -= currentBatchSize - 1;
       remainingBlocks -= currentBatchSize;
     }
@@ -536,10 +523,9 @@ export class Execution {
   }
 
   private updateCacheWithNewFees(newGasFees: bigint[]): void {
-    const existingCacheToKeep = this.gasFeeHistoryCache.length > newGasFees.length
-      ? this.gasFeeHistoryCache.slice(newGasFees.length)
-      : [];
-    
+    const existingCacheToKeep =
+      this.gasFeeHistoryCache.length > newGasFees.length ? this.gasFeeHistoryCache.slice(newGasFees.length) : [];
+
     this.gasFeeHistoryCache = [...existingCacheToKeep, ...newGasFees];
   }
 

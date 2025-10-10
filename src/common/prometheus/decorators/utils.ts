@@ -1,13 +1,14 @@
 import { join } from 'lodash';
-import { WorkingMode } from '../../config/env.validation';
-import { 
-  TrackableClass, 
-  RequestStatus, 
-  TaskStatus, 
+
+import {
   MetricLabels,
+  RequestStatus,
   RequestTrackingOptions,
-  TaskTrackingOptions
+  TaskStatus,
+  TaskTrackingOptions,
+  TrackableClass,
 } from './types';
+import { WorkingMode } from '../../config/env.validation';
 
 /**
  * Extracts request labels from API URL and sub URL
@@ -52,21 +53,21 @@ export async function trackRequest<T>(
   durationMetric: { startTimer: (labels: MetricLabels) => () => number },
   countMetric: { inc: (labels: MetricLabels) => void },
   labels: MetricLabels,
-  options: RequestTrackingOptions = {}
+  options: RequestTrackingOptions = {},
 ): Promise<T> {
   const { successCode = 200 } = options;
-  
+
   const stopTimer = durationMetric.startTimer(labels);
-  
+
   try {
     const result = await operation();
-    
+
     countMetric.inc({
       ...labels,
       status: RequestStatus.COMPLETE,
       code: successCode,
     });
-    
+
     return result;
   } catch (error: any) {
     countMetric.inc({
@@ -74,7 +75,7 @@ export async function trackRequest<T>(
       status: RequestStatus.ERROR,
       code: error.statusCode || 500,
     });
-    
+
     throw error;
   } finally {
     stopTimer();
@@ -88,52 +89,52 @@ export async function trackTask<T>(
   instance: TrackableClass,
   taskName: string,
   operation: () => Promise<T>,
-  options: TaskTrackingOptions = {}
+  options: TaskTrackingOptions = {},
 ): Promise<T> {
   const { logProgress = true, logMemoryUsage = true, customLabels = {} } = options;
-  
+
   const labels = {
     name: taskName,
     ...customLabels,
   };
-  
+
   const stopTimer = instance.prometheus.taskDuration.startTimer(labels);
-  
+
   if (logProgress && instance.logger?.debug) {
     instance.logger.debug(`Task '${taskName}' in progress`);
   }
-  
+
   try {
     const result = await operation();
-    
+
     instance.prometheus.taskCount.inc({
       ...labels,
       status: TaskStatus.COMPLETE,
     });
-    
+
     return result;
   } catch (error: any) {
     if (instance.logger?.error) {
       instance.logger.error(`Task '${taskName}' ended with an error`, error.stack);
     }
-    
+
     instance.prometheus.taskCount.inc({
       ...labels,
       status: TaskStatus.ERROR,
     });
-    
+
     throw error;
   } finally {
     const duration = stopTimer();
-    
+
     if (logProgress && instance.logger?.debug) {
       let message = `Task '${taskName}' is complete. Duration: ${duration}`;
-      
+
       if (logMemoryUsage) {
         const used = process.memoryUsage().heapUsed / 1024 / 1024;
         message += `. Used MB: ${used}`;
       }
-      
+
       instance.logger.debug(message);
     }
   }
@@ -157,4 +158,4 @@ export function getDurationRangeCategory(durationMs: number): string {
   if (durationMs <= 10000) return 'medium';
   if (durationMs <= 60000) return 'slow';
   return 'very_slow';
-} 
+}

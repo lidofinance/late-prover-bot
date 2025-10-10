@@ -1,4 +1,3 @@
-import { ethers } from 'ethers';
 import { NodeOperatorsRegistryContract } from './nor.service';
 
 export interface ExitRequestsData {
@@ -8,7 +7,7 @@ export interface ExitRequestsData {
 
 export interface BeaconBlockHeader {
   slot: number; // uint64
-  proposerIndex: number // uint64
+  proposerIndex: number; // uint64
   parentRoot: string; // bytes32
   stateRoot: string; // bytes32
   bodyRoot: string; // bytes32

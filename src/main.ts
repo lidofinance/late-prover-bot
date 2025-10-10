@@ -6,7 +6,6 @@ import { WorkingMode } from './common/config/env.validation';
 import { DaemonModule } from './daemon/daemon.module';
 import { DaemonService } from './daemon/daemon.service';
 
-
 async function bootstrapDaemon() {
   const daemonApp = await NestFactory.create(DaemonModule, {
     bufferLogs: true,

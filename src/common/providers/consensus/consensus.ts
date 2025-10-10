@@ -14,11 +14,11 @@ import { RequestOptions } from '../base/utils/func';
 let ssz: typeof sszType;
 
 enum SupportedFork {
-  capella ='capella',
+  capella = 'capella',
   deneb = 'deneb',
   electra = 'electra',
   fulu = 'fulu',
-};
+}
 
 export type SupportedBlock =
   | ValueOfFields<typeof ssz.capella.BeaconBlock.fields>
@@ -144,7 +144,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     if (headerForkName) {
       return headerForkName;
     }
-    
+
     // Fallback to environment variable (defaults to 'electra')
     return this.config.get('FORK_NAME') as string;
   }

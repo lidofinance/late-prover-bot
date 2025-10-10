@@ -2,11 +2,7 @@ import { Low } from '@huanshiwushuang/lowdb';
 import { JSONFile } from '@huanshiwushuang/lowdb/node';
 import { Injectable, OnApplicationBootstrap, OnModuleInit } from '@nestjs/common';
 
-import {
-  METRIC_DATA_ACTUALITY,
-  METRIC_LAST_PROCESSED_SLOT_NUMBER,
-  PrometheusService,
-} from '../../common/prometheus';
+import { METRIC_DATA_ACTUALITY, METRIC_LAST_PROCESSED_SLOT_NUMBER, PrometheusService } from '../../common/prometheus';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { RootHex } from '../../common/providers/consensus/response.interface';
 
@@ -46,10 +42,9 @@ export class LastProcessedRoot implements OnModuleInit, OnApplicationBootstrap {
   }
 
   private async initStorage() {
-    this.storage = new Low<LastProcessedRootStorage>(
-      new JSONFile('storage/last-processed-root.json'),
-      { lastProcessedRoot: undefined }
-    );
+    this.storage = new Low<LastProcessedRootStorage>(new JSONFile('storage/last-processed-root.json'), {
+      lastProcessedRoot: undefined,
+    });
     await this.storage.read();
   }
 
@@ -78,4 +73,4 @@ export class LastProcessedRoot implements OnModuleInit, OnApplicationBootstrap {
       },
     });
   }
-} 
+}
