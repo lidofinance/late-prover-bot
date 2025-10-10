@@ -74,10 +74,10 @@ export class PrometheusService {
     }) as Metric<T, L>;
   }
 
-  public buildInfo = this.getOrCreateMetric('Counter', {
+  public buildInfo = this.getOrCreateMetric('Gauge', {
     name: METRIC_BUILD_INFO,
     help: 'Build information',
-    labelNames: ['name', 'version', 'commit', 'branch', 'env', 'network'],
+    labelNames: ['name', 'version', 'commit', 'branch', 'env', 'ACCOUNT', 'WORKING_MODE', 'START_ROOT', 'START_SLOT', 'START_EPOCH', 'LIDO_LOCATOR_ADDRESS', 'DAEMON_SLEEP_INTERVAL_MS', 'TX_MIN_GAS_PRIORITY_FEE', 'TX_MAX_GAS_PRIORITY_FEE', 'TX_GAS_PRIORITY_FEE_PERCENTILE', 'TX_GAS_FEE_HISTORY_DAYS', 'TX_GAS_FEE_HISTORY_PERCENTILE', 'TX_GAS_LIMIT', 'TX_SKIP_GAS_ESTIMATION', 'VALIDATOR_BATCH_SIZE', 'MAX_TRANSACTION_SIZE_BYTES', 'TX_MINING_WAITING_TIMEOUT_MS', 'TX_CONFIRMATIONS', 'HTTP_PORT', 'LOG_LEVEL', 'LOG_FORMAT', 'DRY_RUN', 'CHAIN_ID', 'EL_RPC_RETRY_DELAY_MS', 'EL_RPC_RESPONSE_TIMEOUT_MS', 'EL_RPC_MAX_RETRIES', 'CL_API_RETRY_DELAY_MS', 'CL_API_RESPONSE_TIMEOUT_MS', 'CL_API_MAX_RETRIES', 'FORK_NAME'],
   });
 
   public outgoingELRequestsDuration = this.getOrCreateMetric('Histogram', {
@@ -377,6 +377,24 @@ export class PrometheusService {
     name: METRIC_CONTRACT_CALL_ERRORS_COUNT,
     help: 'Count of contract call errors',
     labelNames: ['contract_type', 'method', 'error_type'],
+  });
+
+  public latestSlot = this.getOrCreateMetric('Gauge', {
+    name: 'latest_slot_number',
+    help: 'Latest beacon slot number observed',
+    labelNames: [],
+  });
+
+  public balanceEth = this.getOrCreateMetric('Gauge', {
+    name: 'balance_eth',
+    help: 'Bot balance in ETH',
+    labelNames: [],
+  });
+
+  public latestSuccessRun = this.getOrCreateMetric('Gauge', {
+    name: 'latest_success_run_timestamp',
+    help: 'Timestamp of the latest successful run',
+    labelNames: [],
   });
 }
 

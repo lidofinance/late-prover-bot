@@ -87,10 +87,6 @@ export class EnvironmentVariables {
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public TX_GAS_LIMIT = 2_000_000; // Increased from 1M to 2M for validator proofs
 
-  @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public TX_GAS_MULTIPLIER = 2; // Multiplier for retry attempts
-
   @IsBoolean()
   @Transform(({ value }) => value === 'true', { toClassOnly: true })
   public TX_SKIP_GAS_ESTIMATION = false; // Skip gas estimation and use fixed limit
@@ -110,16 +106,6 @@ export class EnvironmentVariables {
   @IsNumber()
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public TX_CONFIRMATIONS = 1;
-
-  @IsNumber()
-  @Min(30 * MINUTE)
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public KEYS_INDEXER_RUNNING_PERIOD_MS: number = 3 * HOUR;
-
-  @IsNumber()
-  @Min(384000) // epoch time in ms
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public KEYS_INDEXER_KEYAPI_FRESHNESS_PERIOD_MS: number = 8 * HOUR;
 
   @IsNumber()
   @Min(1025)

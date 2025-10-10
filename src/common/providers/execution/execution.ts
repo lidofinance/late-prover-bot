@@ -2,7 +2,7 @@ import { TransactionResponse } from '@ethersproject/abstract-provider';
 import { MAX_BLOCKCOUNT, SimpleFallbackJsonRpcBatchProvider } from '@lido-nestjs/execution';
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, Optional } from '@nestjs/common';
-import { PopulatedTransaction, Wallet, utils } from 'ethers';
+import { BigNumber, PopulatedTransaction, Wallet, utils } from 'ethers';
 import { InquirerService } from 'nest-commander';
 import { promise as spinnerFor } from 'ora-classic';
 
@@ -175,6 +175,10 @@ export class Execution {
   // ==========================================
   // PUBLIC API
   // ==========================================
+
+  public async balanceOf(address: string): Promise<BigNumber> {
+    return this.provider.getBalance(address);
+  }
 
   public async execute(
     emulateTxCallback: (...payload: any[]) => Promise<any>,
