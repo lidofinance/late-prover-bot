@@ -10,6 +10,13 @@
       }
     },
     "typeCheck": true,
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      {
+        "include": "**/*.json",
+        "exclude": "**/tsconfig*.json",
+        "watchAssets": true
+      }
+    ]
   }
 }
