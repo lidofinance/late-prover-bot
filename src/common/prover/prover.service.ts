@@ -89,6 +89,8 @@ export class ProverService implements OnModuleInit {
       );
     } catch (error) {
       this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+    } finally {
+      this.updateValidatorStorageMetrics();
     }
   }
 
@@ -418,6 +420,26 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
+   * Update validator storage metrics
+   */
+  private updateValidatorStorageMetrics(): void {
+    const storageSize = this.validatorsByDeadlineSlotStorage.size;
+    this.prometheus.validatorStorageDeadlineSlots.set(storageSize);
+
+    if (storageSize > 0) {
+      const slots = Array.from(this.validatorsByDeadlineSlotStorage.keys());
+      const minSlot = Math.min(...slots);
+      const maxSlot = Math.max(...slots);
+      this.prometheus.validatorStorageMinSlot.set(minSlot);
+      this.prometheus.validatorStorageMaxSlot.set(maxSlot);
+    } else {
+      // Reset min/max when storage is empty
+      this.prometheus.validatorStorageMinSlot.set(0);
+      this.prometheus.validatorStorageMaxSlot.set(0);
+    }
+  }
+
+  /**
    * Add validators from an exit request to the persistent storage
    * @param validatorsByDeadlineSlot Validators grouped by deadline slot from a single exit request
    */
@@ -440,6 +462,9 @@ export class ProverService implements OnModuleInit {
       }
       this.validatorsByDeadlineSlotStorage.get(deadlineSlot)!.push(groupData);
     }
+
+    // Update metrics after adding
+    this.updateValidatorStorageMetrics();
   }
 
   /**
@@ -920,6 +945,9 @@ export class ProverService implements OnModuleInit {
     for (const [deadlineSlot] of eligibleEntries) {
       this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
     }
+
+    // Update metrics after cleanup
+    this.updateValidatorStorageMetrics();
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +

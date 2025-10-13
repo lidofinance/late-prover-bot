@@ -1,7 +1,6 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
-import { SigningKey } from 'ethers/lib/utils';
 import { LabelValues } from 'prom-client';
 
 import * as buildInfo from 'build-info';

@@ -51,6 +51,8 @@ import {
   METRIC_VALIDATOR_PROCESSING_DURATION_SECONDS,
   METRIC_VALIDATOR_STORAGE_CLEANUP_COUNT,
   METRIC_VALIDATOR_STORAGE_DEADLINE_SLOTS,
+  METRIC_VALIDATOR_STORAGE_MAX_SLOT,
+  METRIC_VALIDATOR_STORAGE_MIN_SLOT,
   METRIC_VALIDATOR_STORAGE_SIZE,
 } from './prometheus.constants';
 
@@ -300,6 +302,18 @@ export class PrometheusService {
   public validatorStorageDeadlineSlots = this.getOrCreateMetric('Gauge', {
     name: METRIC_VALIDATOR_STORAGE_DEADLINE_SLOTS,
     help: 'Number of deadline slots in validator storage',
+    labelNames: [],
+  });
+
+  public validatorStorageMinSlot = this.getOrCreateMetric('Gauge', {
+    name: METRIC_VALIDATOR_STORAGE_MIN_SLOT,
+    help: 'Minimum deadline slot in validator storage',
+    labelNames: [],
+  });
+
+  public validatorStorageMaxSlot = this.getOrCreateMetric('Gauge', {
+    name: METRIC_VALIDATOR_STORAGE_MAX_SLOT,
+    help: 'Maximum deadline slot in validator storage',
     labelNames: [],
   });
 
