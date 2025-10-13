@@ -44,9 +44,9 @@ export class DaemonService implements OnModuleInit {
     const TX_SIGNER_PRIVATE_KEY = this.config.get('TX_SIGNER_PRIVATE_KEY');
     let account = 'None';
     if (TX_SIGNER_PRIVATE_KEY) {
-      const publicKey = new SigningKey(TX_SIGNER_PRIVATE_KEY).publicKey;
-      account = publicKey;
-      this.account = publicKey;
+      const address = new ethers.Wallet(TX_SIGNER_PRIVATE_KEY).address;
+      account = address;
+      this.account = address;
     }
     const TX_MIN_GAS_PRIORITY_FEE = this.config.get('TX_MIN_GAS_PRIORITY_FEE');
     const TX_MAX_GAS_PRIORITY_FEE = this.config.get('TX_MAX_GAS_PRIORITY_FEE');
