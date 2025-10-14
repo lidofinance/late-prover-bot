@@ -31,14 +31,14 @@ export interface BeaconBlock {
 }
 
 export interface ValidatorWitness {
-  exitRequestIndex: number;  // uint32
-  withdrawalCredentials: string;  // bytes32
-  effectiveBalance: number;  // uint64
+  exitRequestIndex: number; // uint32
+  withdrawalCredentials: string; // bytes32
+  effectiveBalance: number; // uint64
   slashed: boolean;
-  activationEligibilityEpoch: number;  // uint64
-  activationEpoch: number;  // uint64
-  withdrawableEpoch: number;  // uint64
-  validatorProof: string[];  // bytes32[]
+  activationEligibilityEpoch: number; // uint64
+  activationEpoch: number; // uint64
+  withdrawableEpoch: number; // uint64
+  validatorProof: string[]; // bytes32[]
 }
 
 export interface ValidatorResponse {
@@ -57,7 +57,7 @@ export interface ValidatorResponse {
   };
 }
 
-export type ValidatorStatus = 
+export type ValidatorStatus =
   | 'pending_initialized'
   | 'pending_queued'
   | 'active_ongoing'
@@ -66,4 +66,4 @@ export type ValidatorStatus =
   | 'exited_unslashed'
   | 'exited_slashed'
   | 'withdrawal_possible'
-  | 'withdrawal_done'; 
+  | 'withdrawal_done';

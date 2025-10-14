@@ -148,7 +148,6 @@ yarn run start:prod
 | `TX_GAS_FEE_HISTORY_DAYS` | Days of gas fee history | no | `1` |
 | `TX_GAS_FEE_HISTORY_PERCENTILE` | Gas fee history percentile | no | `50` |
 | `TX_GAS_LIMIT` | Gas limit for transactions | no | `2000000` |
-| `TX_GAS_MULTIPLIER` | Gas multiplier for retry attempts | no | `2` |
 | `TX_SKIP_GAS_ESTIMATION` | Skip gas estimation and use fixed limit | no | `false` |
 | `VALIDATOR_BATCH_SIZE` | Maximum validators per transaction | no | `50` |
 | `MAX_TRANSACTION_SIZE_BYTES` | Maximum transaction size in bytes | no | `100000` |
@@ -179,9 +178,8 @@ If you encounter `UNPREDICTABLE_GAS_LIMIT` errors:
 
 1. **Increase gas limit**: Set `TX_GAS_LIMIT=2500000` (or higher)
 2. **Skip gas estimation**: Set `TX_SKIP_GAS_ESTIMATION=true` to use fixed gas limits
-3. **Adjust retry multiplier**: Set `TX_GAS_MULTIPLIER=3` for higher retry gas limits
-4. **Check contract state**: Ensure your validators and exit requests are valid
-5. **Network issues**: Verify your RPC endpoints are stable and responsive
+3. **Check contract state**: Ensure your validators and exit requests are valid
+4. **Network issues**: Verify your RPC endpoints are stable and responsive
 
 #### Intrinsic Gas Too Low Error
 If you see "intrinsic gas too low: gas X, minimum needed Y":

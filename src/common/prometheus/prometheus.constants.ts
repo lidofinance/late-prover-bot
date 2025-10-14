@@ -49,6 +49,8 @@ export const METRIC_EXIT_REQUESTS_PROCESSED_COUNT = `exit_requests_processed_cou
 // Storage and Cache Metrics
 export const METRIC_VALIDATOR_STORAGE_SIZE = `validator_storage_size`;
 export const METRIC_VALIDATOR_STORAGE_DEADLINE_SLOTS = `validator_storage_deadline_slots`;
+export const METRIC_VALIDATOR_STORAGE_MIN_SLOT = `validator_storage_min_slot`;
+export const METRIC_VALIDATOR_STORAGE_MAX_SLOT = `validator_storage_max_slot`;
 export const METRIC_VALIDATOR_STORAGE_CLEANUP_COUNT = `validator_storage_cleanup_count`;
 export const METRIC_MEMORY_USAGE_BYTES = `memory_usage_bytes`;
 

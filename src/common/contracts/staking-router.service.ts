@@ -1,10 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
-import { join } from 'path';
-import { Execution } from '../providers/execution/execution';
+
 import { LidoLocatorContract } from './lido-locator.service';
 import { NodeOperatorsRegistryContract } from './nor.service';
+import contractJson from '../contracts/abi/staking-router.json';
 import { PrometheusService } from '../prometheus/prometheus.service';
+import { Execution } from '../providers/execution/execution';
 
 export interface StakingModule {
   id: number;
@@ -41,22 +42,16 @@ export class StakingRouterContract implements OnModuleInit {
     protected readonly execution: Execution,
     protected readonly lidoLocator: LidoLocatorContract,
     protected readonly prometheus: PrometheusService,
-  ) { }
+  ) {}
 
   async onModuleInit(): Promise<void> {
     try {
       // Get StakingRouter address from LidoLocator
       this.stakingRouterAddress = await this.lidoLocator.getStakingRouter();
       this.logger.log(`StakingRouter address from LidoLocator: ${this.stakingRouterAddress}`);
-
-      const contractJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'staking-router.json'));
       const iface = new ethers.utils.Interface(contractJson);
 
-      this.contract = new ethers.Contract(
-        this.stakingRouterAddress,
-        iface,
-        this.execution.provider,
-      );
+      this.contract = new ethers.Contract(this.stakingRouterAddress, iface, this.execution.provider);
 
       this.logger.log('StakingRouter contract initialized successfully');
 
@@ -72,7 +67,7 @@ export class StakingRouterContract implements OnModuleInit {
   public async getStakingModules(): Promise<StakingModule[]> {
     try {
       const modules = await this.contract.getStakingModules();
-      
+
       const results: StakingModule[] = modules.map((module: any) => ({
         id: module.id,
         stakingModuleAddress: module.stakingModuleAddress,
@@ -82,19 +77,18 @@ export class StakingRouterContract implements OnModuleInit {
       this.prometheus.stakingModuleOperationsCount.inc({
         module_id: 'all',
         operation_type: 'getStakingModules',
-        status: 'success'
+        status: 'success',
       });
 
       this.logger.debug(`Successfully loaded ${results.length} staking modules`);
       return results;
-
     } catch (error) {
       this.prometheus.stakingModuleOperationsCount.inc({
         module_id: 'all',
         operation_type: 'getStakingModules',
-        status: 'error'
+        status: 'error',
       });
-      
+
       this.logger.error('Failed to get staking modules:', error);
       throw error;
     }
@@ -108,19 +102,18 @@ export class StakingRouterContract implements OnModuleInit {
   public async loadStakingModuleContracts(): Promise<Map<number, NodeOperatorsRegistryContract>> {
     try {
       const stakingModules = await this.getStakingModules();
-      
+
       // Clear existing contracts
       this.stakingModuleContracts.clear();
 
       // Create NodeOperatorsRegistryContract instances for each staking module
       for (const module of stakingModules) {
-        const norContract = new NodeOperatorsRegistryContract(
-          module.stakingModuleAddress,
-          this.execution,
-        );
-        
+        const norContract = new NodeOperatorsRegistryContract(module.stakingModuleAddress, this.execution);
+
         this.stakingModuleContracts.set(module.id, norContract);
-        this.logger.log(`Loaded staking module contract ${module.id} (${module.name}) at ${module.stakingModuleAddress}`);
+        this.logger.log(
+          `Loaded staking module contract ${module.id} (${module.name}) at ${module.stakingModuleAddress}`,
+        );
       }
 
       this.logger.log(`Loaded ${this.stakingModuleContracts.size} staking module contracts`);
@@ -139,4 +132,4 @@ export class StakingRouterContract implements OnModuleInit {
   public getStakingModuleContract(moduleId: number): NodeOperatorsRegistryContract | undefined {
     return this.stakingModuleContracts.get(moduleId);
   }
-} 
+}

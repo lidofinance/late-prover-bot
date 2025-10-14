@@ -1,17 +1,17 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
+
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
 import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
+import { getSizeRangeCategory } from '../prometheus/decorators';
+import { PrometheusService } from '../prometheus/prometheus.service';
 import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
-import { PrometheusService } from '../prometheus/prometheus.service';
-import { getSizeRangeCategory } from '../prometheus/decorators';
-
 
 @Injectable()
 export class ProverService implements OnModuleInit {
@@ -40,12 +40,14 @@ export class ProverService implements OnModuleInit {
     protected readonly execution: Execution,
     protected readonly prometheus: PrometheusService,
     @Inject('VALIDATOR_BATCH_SIZE') private readonly validatorBatchSize: number,
-  ) { }
+  ) {}
 
   async onModuleInit(): Promise<void> {
     try {
       this.SHARD_COMMITTEE_PERIOD_IN_SECONDS = await this.verifier.getShardCommitteePeriodInSeconds();
-      this.loggerService.log(`SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract: ${this.SHARD_COMMITTEE_PERIOD_IN_SECONDS}`);
+      this.loggerService.log(
+        `SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract: ${this.SHARD_COMMITTEE_PERIOD_IN_SECONDS}`,
+      );
 
       // Initialize storage with last 7 days of validator events
       await this.initializeStorageWithRecentEvents();
@@ -73,9 +75,9 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `Scanning for exit requests in recent blocks:` +
-        `\n  Current block: ${currentBlock}` +
-        `\n  From block: ${fromBlock}` +
-        `\n  Block range: ${blocksToLookBack} blocks (${DAYS_TO_LOOK_BACK} days)`
+          `\n  Current block: ${currentBlock}` +
+          `\n  From block: ${fromBlock}` +
+          `\n  Block range: ${blocksToLookBack} blocks (${DAYS_TO_LOOK_BACK} days)`,
       );
 
       // Use the same batch processing but without eligible validator processing
@@ -83,10 +85,12 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `Storage initialization completed:` +
-        `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`
+          `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
       );
     } catch (error) {
       this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+    } finally {
+      this.updateValidatorStorageMetrics();
     }
   }
 
@@ -111,8 +115,8 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Init ${fromBlock}-${toBlock}] Validator accumulation completed:` +
-      `\n  Total processing time: ${Date.now() - startTime}ms` +
-      `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`
+        `\n  Total processing time: ${Date.now() - startTime}ms` +
+        `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
     );
   }
 
@@ -136,8 +140,8 @@ export class ProverService implements OnModuleInit {
     const earliestPossibleVoluntaryExitTimestamp =
       this.consensus.genesisTimestamp +
       activationEpoch *
-      Number(this.consensus.beaconConfig.SLOTS_PER_EPOCH) *
-      Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
+        Number(this.consensus.beaconConfig.SLOTS_PER_EPOCH) *
+        Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
       this.SHARD_COMMITTEE_PERIOD_IN_SECONDS;
 
     // The actual eligible timestamp is the max between the exit request submission time
@@ -188,21 +192,18 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
-      `\n  Slot: ${deadlineSlot}` +
-      `\n  Validators in group: ${validatorGroup.length}`,
+        `\n  Slot: ${deadlineSlot}` +
+        `\n  Validators in group: ${validatorGroup.length}`,
     );
 
     // Track eligible validators
-    this.prometheus.validatorsEligibleCount.set(
-      { module_id: 'all' },
-      groupSize
-    );
+    this.prometheus.validatorsEligibleCount.set({ module_id: 'all' }, groupSize);
 
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
     // Track beacon state fetch
     const stopStateFetch = this.prometheus.beaconStateFetchDuration.startTimer({
-      state_type: 'deadline'
+      state_type: 'deadline',
     });
 
     const deadlineState = await this.consensus.getState(deadlineSlot);
@@ -210,7 +211,7 @@ export class ProverService implements OnModuleInit {
 
     // Track state deserialization
     const stopDeserialization = this.prometheus.beaconStateDeserializationDuration.startTimer({
-      fork_name: deadlineState.forkName
+      fork_name: deadlineState.forkName,
     });
 
     const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
@@ -218,7 +219,7 @@ export class ProverService implements OnModuleInit {
 
     if (!deadlineStateView) {
       this.prometheus.stateDeserializationErrorsCount.inc({
-        fork_name: deadlineState.forkName
+        fork_name: deadlineState.forkName,
       });
 
       this.loggerService.error(
@@ -254,7 +255,7 @@ export class ProverService implements OnModuleInit {
         // Track processed validator
         this.prometheus.validatorsProcessedCount.inc({
           module_id: validator.moduleId.toString(),
-          processing_type: 'proof_generation'
+          processing_type: 'proof_generation',
         });
       } else {
         skippedValidators++;
@@ -266,8 +267,8 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Deadline slot group processing completed:` +
-      `\n  Slot: ${deadlineSlot}` +
-      `\n  Processing time: ${processingDuration}ms`,
+        `\n  Slot: ${deadlineSlot}` +
+        `\n  Processing time: ${processingDuration}ms`,
     );
 
     return { validatorWitnesses, processedValidators, skippedValidators };
@@ -290,7 +291,7 @@ export class ProverService implements OnModuleInit {
     // Track individual validator processing
     const stopValidatorTimer = this.prometheus.validatorProcessingDuration.startTimer({
       module_id: moduleId,
-      processing_type: 'eligibility_check'
+      processing_type: 'eligibility_check',
     });
 
     const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
@@ -298,20 +299,20 @@ export class ProverService implements OnModuleInit {
     // Check if validator already exited
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
       this.prometheus.exitAlreadyProcessedCount.inc({
-        module_id: moduleId
+        module_id: moduleId,
       });
 
       this.prometheus.validatorsSkippedCount.inc({
         module_id: moduleId,
-        reason: 'already_exited'
+        reason: 'already_exited',
       });
 
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator already exited:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}` +
-        `\n  Current exit epoch: ${deadlineStateValidator.exitEpoch}` +
-        `\n  Required exit epoch: ${exitDeadlineEpoch}`,
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Current exit epoch: ${deadlineStateValidator.exitEpoch}` +
+          `\n  Required exit epoch: ${exitDeadlineEpoch}`,
       );
 
       stopValidatorTimer();
@@ -321,12 +322,12 @@ export class ProverService implements OnModuleInit {
     const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
     if (proofSlotTimestamp < eligibleExitRequestTimestamp) {
       this.prometheus.exitDeadlineFutureCount.inc({
-        module_id: moduleId
+        module_id: moduleId,
       });
 
       this.prometheus.validatorsSkippedCount.inc({
         module_id: moduleId,
-        reason: 'not_eligible_yet'
+        reason: 'not_eligible_yet',
       });
 
       stopValidatorTimer();
@@ -340,12 +341,14 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Validator eligibility check:` +
-      `\n  Index: ${validatorIndex}` +
-      `\n  Seconds since eligible: ${secondsSinceExitIsEligible}` +
-      `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
+        `\n  Index: ${validatorIndex}` +
+        `\n  Seconds since eligible: ${secondsSinceExitIsEligible}` +
+        `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
     );
 
-    const isPenaltyApplicable = await this.getContractForModule(Number(validator.moduleId)).isValidatorExitDelayPenaltyApplicable(
+    const isPenaltyApplicable = await this.getContractForModule(
+      Number(validator.moduleId),
+    ).isValidatorExitDelayPenaltyApplicable(
       Number(validator.nodeOpId),
       proofSlotTimestamp,
       validator.validatorPubkey,
@@ -355,21 +358,21 @@ export class ProverService implements OnModuleInit {
     // Track penalty application result
     this.prometheus.validatorsPenaltyApplicableCount.inc({
       module_id: moduleId,
-      applicable: isPenaltyApplicable ? 'yes' : 'no'
+      applicable: isPenaltyApplicable ? 'yes' : 'no',
     });
 
     if (!isPenaltyApplicable) {
       this.prometheus.validatorsSkippedCount.inc({
         module_id: moduleId,
-        reason: 'penalty_not_applicable'
+        reason: 'penalty_not_applicable',
       });
 
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}` +
-        `\n  Validator node operator: ${validator.nodeOpId}` +
-        `\n  Validator module: ${validator.moduleId}`,
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Validator node operator: ${validator.nodeOpId}` +
+          `\n  Validator module: ${validator.moduleId}`,
       );
 
       stopValidatorTimer();
@@ -379,7 +382,7 @@ export class ProverService implements OnModuleInit {
     // Track proof generation
     const stopProofGeneration = this.prometheus.proofGenerationDuration.startTimer({
       proof_type: 'validator',
-      slot_type: 'current'
+      slot_type: 'current',
     });
 
     const proof = generateValidatorProof(stateView, validatorIndex);
@@ -388,7 +391,7 @@ export class ProverService implements OnModuleInit {
     this.prometheus.proofGenerationCount.inc({
       proof_type: 'validator',
       slot_type: 'current',
-      status: 'success'
+      status: 'success',
     });
 
     let withdrawableEpoch = deadlineStateValidator.withdrawableEpoch;
@@ -417,6 +420,26 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
+   * Update validator storage metrics
+   */
+  private updateValidatorStorageMetrics(): void {
+    const storageSize = this.validatorsByDeadlineSlotStorage.size;
+    this.prometheus.validatorStorageDeadlineSlots.set(storageSize);
+
+    if (storageSize > 0) {
+      const slots = Array.from(this.validatorsByDeadlineSlotStorage.keys());
+      const minSlot = Math.min(...slots);
+      const maxSlot = Math.max(...slots);
+      this.prometheus.validatorStorageMinSlot.set(minSlot);
+      this.prometheus.validatorStorageMaxSlot.set(maxSlot);
+    } else {
+      // Reset min/max when storage is empty
+      this.prometheus.validatorStorageMinSlot.set(0);
+      this.prometheus.validatorStorageMaxSlot.set(0);
+    }
+  }
+
+  /**
    * Add validators from an exit request to the persistent storage
    * @param validatorsByDeadlineSlot Validators grouped by deadline slot from a single exit request
    */
@@ -431,7 +454,7 @@ export class ProverService implements OnModuleInit {
           exitDeadlineEpoch: number;
         }[];
       }
-    >
+    >,
   ): void {
     for (const [deadlineSlot, groupData] of validatorsByDeadlineSlot) {
       if (!this.validatorsByDeadlineSlotStorage.has(deadlineSlot)) {
@@ -439,6 +462,9 @@ export class ProverService implements OnModuleInit {
       }
       this.validatorsByDeadlineSlotStorage.get(deadlineSlot)!.push(groupData);
     }
+
+    // Update metrics after adding
+    this.updateValidatorStorageMetrics();
   }
 
   /**
@@ -448,7 +474,11 @@ export class ProverService implements OnModuleInit {
    * @param batchSize Size of each batch (default: 10000)
    * @returns Array of batch objects with from/to block numbers
    */
-  private createBatches(fromBlock: number, toBlock: number, batchSize: number = 10000): Array<{ from: number; to: number }> {
+  private createBatches(
+    fromBlock: number,
+    toBlock: number,
+    batchSize: number = 10000,
+  ): Array<{ from: number; to: number }> {
     const blockRange = toBlock - fromBlock;
     const batches: Array<{ from: number; to: number }> = [];
 
@@ -471,7 +501,10 @@ export class ProverService implements OnModuleInit {
   /**
    * Initialize beacon state and headers for processing
    */
-  private async initializeBeaconState(fromBlock: number, toBlock: number): Promise<{
+  private async initializeBeaconState(
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<{
     finalizedStateView: any;
     provableFinalizedBlockHeader: any;
     ssz: any;
@@ -506,25 +539,23 @@ export class ProverService implements OnModuleInit {
     exitRequest: any,
     finalizedStateView: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<void> {
     const requestStartTime = Date.now();
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing exit request:` +
-      `\n  Hash: ${exitRequest.exitRequestsHash}` +
-      `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
+        `\n  Hash: ${exitRequest.exitRequestsHash}` +
+        `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
     );
 
     const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
-    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
-      exitRequest.exitRequestsHash,
-    );
+    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Exit request details:` +
-      `\n  Validators count: ${validators.length}` +
-      `\n  Delivery timestamp: ${deliveredTimestamp}` +
-      `\n  Processing time: ${Date.now() - requestStartTime}ms`,
+        `\n  Validators count: ${validators.length}` +
+        `\n  Delivery timestamp: ${deliveredTimestamp}` +
+        `\n  Processing time: ${Date.now() - requestStartTime}ms`,
     );
 
     const groupingStartTime = Date.now();
@@ -539,8 +570,8 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Validator grouping completed:` +
-      `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
-      `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
+        `\n  Total groups: ${validatorsByDeadlineSlot.size}` +
+        `\n  Grouping time: ${Date.now() - groupingStartTime}ms`,
     );
 
     // Add validators to persistent storage
@@ -548,9 +579,9 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Exit request accumulated:` +
-      `\n  Total validators: ${validators.length}` +
-      `\n  Added to storage` +
-      `\n  Processing time: ${Date.now() - requestStartTime}ms`,
+        `\n  Total validators: ${validators.length}` +
+        `\n  Added to storage` +
+        `\n  Processing time: ${Date.now() - requestStartTime}ms`,
     );
   }
 
@@ -561,23 +592,29 @@ export class ProverService implements OnModuleInit {
     batches: Array<{ from: number; to: number }>,
     finalizedStateView: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<void> {
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
-      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`);
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}: blocks ${batch.from}-${batch.to}`,
+      );
 
       // Fetch exit requests for this batch only
       const exitRequestsResult = await this.exitRequests.getExitRequestsFromBlock(batch.from, batch.to);
 
       if (!exitRequestsResult || exitRequestsResult.length === 0) {
-        this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`);
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: No exit requests found`,
+        );
         continue;
       }
 
-      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`);
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length}: Found ${exitRequestsResult.length} exit requests`,
+      );
 
       // Process each exit request in this batch
       for (const exitRequest of exitRequestsResult) {
@@ -586,7 +623,7 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Batch ${i + 1}/${batches.length} completed: ` +
-        `${Date.now() - batchStartTime}ms`
+          `${Date.now() - batchStartTime}ms`,
       );
     }
   }
@@ -601,7 +638,7 @@ export class ProverService implements OnModuleInit {
     provableFinalizedBlockHeader: any,
     ssz: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<{ processedValidators: number; skippedValidators: number }> {
     // Combine all validators for this deadline slot from all exit requests
     const allValidators: {
@@ -619,9 +656,7 @@ export class ProverService implements OnModuleInit {
     }
 
     // Get delivery timestamp from the first exit request
-    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(
-      exitRequest.exitRequestsHash,
-    );
+    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     const isOldSlot = await this.isSlotOld(deadlineSlot);
     const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
@@ -658,16 +693,10 @@ export class ProverService implements OnModuleInit {
         exitRequest,
         finalizedStateView,
         provableFinalizedBlockHeader,
-        ssz
+        ssz,
       );
     } else {
-      await this.processCurrentSlot(
-        validatorWitnesses,
-        exitRequest,
-        provableDeadlineBlockHeader,
-        fromBlock,
-        toBlock
-      );
+      await this.processCurrentSlot(validatorWitnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
     }
 
     return { processedValidators, skippedValidators };
@@ -682,16 +711,16 @@ export class ProverService implements OnModuleInit {
     exitRequest: any,
     finalizedStateView: any,
     provableFinalizedBlockHeader: any,
-    ssz: any
+    ssz: any,
   ): Promise<void> {
     // Split into batches to avoid oversized transactions
     const batches = this.createValidatorBatches(validatorWitnesses);
 
     this.loggerService.log(
       `Processing historical slot ${deadlineSlot} in ${batches.length} batches:` +
-      `\n  Total validators: ${validatorWitnesses.length}` +
-      `\n  Batch size: ${this.validatorBatchSize}` +
-      `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
+        `\n  Total validators: ${validatorWitnesses.length}` +
+        `\n  Batch size: ${this.validatorBatchSize}` +
+        `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
     );
 
     for (let i = 0; i < batches.length; i++) {
@@ -700,8 +729,8 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `Processing historical batch ${i + 1}/${batches.length}:` +
-        `\n  Slot: ${deadlineSlot}` +
-        `\n  Validators in batch: ${batch.length}`
+          `\n  Slot: ${deadlineSlot}` +
+          `\n  Validators in batch: ${batch.length}`,
       );
 
       const summaryIndex = this.calcSummaryIndex(deadlineSlot);
@@ -744,7 +773,7 @@ export class ProverService implements OnModuleInit {
               exitRequestsData,
             );
           },
-          // Population callback  
+          // Population callback
           async (beaconBlock, oldBlock, validatorWitnesses, exitRequestsData) => {
             return await this.verifier.populateVerifyHistoricalValidatorExitDelay(
               beaconBlock,
@@ -754,23 +783,23 @@ export class ProverService implements OnModuleInit {
             );
           },
           // Payload
-          [provableFinalizedBlockHeader, oldBlock, batch, exitRequest.exitRequestsData]
+          [provableFinalizedBlockHeader, oldBlock, batch, exitRequest.exitRequestsData],
         );
 
         this.loggerService.log(
           `✅ Historical batch ${i + 1}/${batches.length} completed:` +
-          `\n  Slot: ${deadlineSlot}` +
-          `\n  Validators: ${batch.length}` +
-          `\n  Processing time: ${Date.now() - batchStartTime}ms`
+            `\n  Slot: ${deadlineSlot}` +
+            `\n  Validators: ${batch.length}` +
+            `\n  Processing time: ${Date.now() - batchStartTime}ms`,
         );
       } catch (error) {
         // Don't log full error details here - execution service has already logged them
         // Just log a brief reference for this batch context
         this.loggerService.error(
           `❌ Historical batch ${i + 1}/${batches.length} failed:` +
-          `\n  Slot: ${deadlineSlot}` +
-          `\n  Validators: ${batch.length}` +
-          `\n  Error: ${this.getErrorReference(error)}`
+            `\n  Slot: ${deadlineSlot}` +
+            `\n  Validators: ${batch.length}` +
+            `\n  Error: ${this.getErrorReference(error)}`,
         );
         throw error;
       }
@@ -785,17 +814,17 @@ export class ProverService implements OnModuleInit {
     exitRequest: any,
     provableDeadlineBlockHeader: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<void> {
     // Split into batches to avoid oversized transactions
     const batches = this.createValidatorBatches(validatorWitnesses);
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing current slot in ${batches.length} batches:` +
-      `\n  Total validators: ${validatorWitnesses.length}` +
-      `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
-      `\n  Batch size: ${this.validatorBatchSize}` +
-      `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`
+        `\n  Total validators: ${validatorWitnesses.length}` +
+        `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+        `\n  Batch size: ${this.validatorBatchSize}` +
+        `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
     );
 
     for (let i = 0; i < batches.length; i++) {
@@ -804,8 +833,8 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}:` +
-        `\n  Validators in batch: ${batch.length}` +
-        `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`
+          `\n  Validators in batch: ${batch.length}` +
+          `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
       );
 
       try {
@@ -815,11 +844,7 @@ export class ProverService implements OnModuleInit {
         await this.execution.execute(
           // Emulation callback
           async (beaconBlock, validatorWitnesses, exitRequestsData) => {
-            return await this.verifier.verifyValidatorExitDelay(
-              beaconBlock,
-              validatorWitnesses,
-              exitRequestsData,
-            );
+            return await this.verifier.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequestsData);
           },
           // Population callback
           async (beaconBlock, validatorWitnesses, exitRequestsData) => {
@@ -830,23 +855,23 @@ export class ProverService implements OnModuleInit {
             );
           },
           // Payload
-          [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData]
+          [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData],
         );
 
         this.loggerService.log(
           `[Blocks ${fromBlock}-${toBlock}] ✅ Batch ${i + 1}/${batches.length} completed:` +
-          `\n  Validators: ${batch.length}` +
-          `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
-          `\n  Total batch time: ${Date.now() - batchStartTime}ms`
+            `\n  Validators: ${batch.length}` +
+            `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
+            `\n  Total batch time: ${Date.now() - batchStartTime}ms`,
         );
       } catch (error) {
         // Don't log full error details here - execution service has already logged them
         // Just log a brief reference for this batch context
         this.loggerService.error(
           `[Blocks ${fromBlock}-${toBlock}] ❌ Batch ${i + 1}/${batches.length} failed:` +
-          `\n  Validators: ${batch.length}` +
-          `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
-          `\n  Error: ${this.getErrorReference(error)}`
+            `\n  Validators: ${batch.length}` +
+            `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+            `\n  Error: ${this.getErrorReference(error)}`,
         );
         throw error;
       }
@@ -861,22 +886,25 @@ export class ProverService implements OnModuleInit {
     provableFinalizedBlockHeader: any,
     ssz: any,
     fromBlock: number,
-    toBlock: number
+    toBlock: number,
   ): Promise<void> {
     // Filter storage entries where deadline slot <= current slot
     const currentSlot = Number(provableFinalizedBlockHeader.header.slot);
-    const eligibleEntries = Array.from(this.validatorsByDeadlineSlotStorage.entries())
-      .filter(([deadlineSlot]) => deadlineSlot <= currentSlot);
+    const eligibleEntries = Array.from(this.validatorsByDeadlineSlotStorage.entries()).filter(
+      ([deadlineSlot]) => deadlineSlot <= currentSlot,
+    );
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing accumulated validators from storage:` +
-      `\n  Current slot: ${currentSlot}` +
-      `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
-      `\n  Eligible deadline slots (passed): ${eligibleEntries.length}`
+        `\n  Current slot: ${currentSlot}` +
+        `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
+        `\n  Eligible deadline slots (passed): ${eligibleEntries.length}`,
     );
 
     if (eligibleEntries.length === 0) {
-      this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] No eligible validators to process - all deadlines are in the future`);
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] No eligible validators to process - all deadlines are in the future`,
+      );
       return;
     }
 
@@ -892,7 +920,7 @@ export class ProverService implements OnModuleInit {
         provableFinalizedBlockHeader,
         ssz,
         fromBlock,
-        toBlock
+        toBlock,
       );
 
       totalProcessedValidators += processedValidators;
@@ -901,9 +929,9 @@ export class ProverService implements OnModuleInit {
 
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] All eligible validators processed:` +
-      `\n  Total processed: ${totalProcessedValidators}` +
-      `\n  Total skipped: ${totalSkippedValidators}` +
-      `\n  Deadline slots processed: ${eligibleEntries.length}`
+        `\n  Total processed: ${totalProcessedValidators}` +
+        `\n  Total skipped: ${totalSkippedValidators}` +
+        `\n  Deadline slots processed: ${eligibleEntries.length}`,
     );
 
     // Remove processed entries from storage
@@ -913,19 +941,18 @@ export class ProverService implements OnModuleInit {
   /**
    * Clean up processed entries from storage
    */
-  private cleanupProcessedEntries(
-    eligibleEntries: Array<[number, any[]]>,
-    fromBlock: number,
-    toBlock: number
-  ): void {
+  private cleanupProcessedEntries(eligibleEntries: Array<[number, any[]]>, fromBlock: number, toBlock: number): void {
     for (const [deadlineSlot] of eligibleEntries) {
       this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
     }
 
+    // Update metrics after cleanup
+    this.updateValidatorStorageMetrics();
+
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +
-      `\n  Entries removed: ${eligibleEntries.length}` +
-      `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`
+        `\n  Entries removed: ${eligibleEntries.length}` +
+        `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`,
     );
   }
 
@@ -939,7 +966,10 @@ export class ProverService implements OnModuleInit {
       this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
       // Initialize beacon state and headers
-      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(fromBlock, toBlock);
+      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(
+        fromBlock,
+        toBlock,
+      );
 
       // Process all batches and accumulate validators in storage
       await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
@@ -949,14 +979,14 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Block processing completed:` +
-        `\n  Total processing time: ${Date.now() - startTime}ms`,
+          `\n  Total processing time: ${Date.now() - startTime}ms`,
       );
     } catch (error) {
       // Brief error summary without full details (detailed errors already logged by lower layers)
       this.loggerService.error(
         `[Blocks ${fromBlock}-${toBlock}] Processing failed:` +
-        `\n  Error: ${this.getErrorReference(error)}` +
-        `\n  Total time: ${Date.now() - startTime}ms`
+          `\n  Error: ${this.getErrorReference(error)}` +
+          `\n  Total time: ${Date.now() - startTime}ms`,
       );
       throw error;
     }
@@ -1001,7 +1031,9 @@ export class ProverService implements OnModuleInit {
       const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
       const withdrawableEpoch = stateValidator.withdrawableEpoch;
 
-      const exitDeadlineThreshold = await this.getContractForModule(Number(validator.moduleId)).exitDeadlineThreshold(Number(validator.nodeOpId));
+      const exitDeadlineThreshold = await this.getContractForModule(Number(validator.moduleId)).exitDeadlineThreshold(
+        Number(validator.nodeOpId),
+      );
       const exitDeadline = eligibleExitRequestTimestamp + exitDeadlineThreshold;
       // this is the slot where validator must exit
       const exitDeadlineSlot = this.calculateSlotFromExitDeadline(exitDeadline);
@@ -1009,16 +1041,16 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.debug?.(
         `[Blocks ${fromBlock}-${toBlock}] Validator details:` +
-        `\n  Index: ${validatorIndex}` +
-        `\n  Public key: ${validator.validatorPubkey}` +
-        `\n  Node Operator: ${validator.nodeOpId}` +
-        `\n  Module ID: ${validator.moduleId}` +
-        `\n  Activation epoch: ${activationEpoch}` +
-        `\n  Withdrawable epoch: ${withdrawableEpoch}` +
-        `\n  Exit deadline: ${exitDeadline}` +
-        `\n  Exit deadline slot: ${exitDeadlineSlot}` +
-        `\n  Exit deadline epoch: ${exitDeadlineEpoch}` +
-        `\n  Exit deadline threshold: ${exitDeadlineThreshold}`,
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Node Operator: ${validator.nodeOpId}` +
+          `\n  Module ID: ${validator.moduleId}` +
+          `\n  Activation epoch: ${activationEpoch}` +
+          `\n  Withdrawable epoch: ${withdrawableEpoch}` +
+          `\n  Exit deadline: ${exitDeadline}` +
+          `\n  Exit deadline slot: ${exitDeadlineSlot}` +
+          `\n  Exit deadline epoch: ${exitDeadlineEpoch}` +
+          `\n  Exit deadline threshold: ${exitDeadlineThreshold}`,
       );
 
       if (!validatorsByDeadlineSlot.has(exitDeadlineSlot)) {
@@ -1125,10 +1157,10 @@ export class ProverService implements OnModuleInit {
 
       this.loggerService.debug?.(
         `Checking if slot ${slot} is old:` +
-        `\n  Current slot: ${currentSlot}` +
-        `\n  Distance: ${distance}` +
-        `\n  Threshold: ${slotsPerHistoricalRoot}` +
-        `\n  Is old: ${distance >= slotsPerHistoricalRoot}`,
+          `\n  Current slot: ${currentSlot}` +
+          `\n  Distance: ${distance}` +
+          `\n  Threshold: ${slotsPerHistoricalRoot}` +
+          `\n  Is old: ${distance >= slotsPerHistoricalRoot}`,
       );
 
       return distance >= slotsPerHistoricalRoot;
@@ -1165,9 +1197,7 @@ export class ProverService implements OnModuleInit {
       }
 
       // For errors without ID, return just the first 100 characters
-      const shortMessage = error.message.length > 100
-        ? error.message.substring(0, 100) + '...'
-        : error.message;
+      const shortMessage = error.message.length > 100 ? error.message.substring(0, 100) + '...' : error.message;
       return `${error.name}: ${shortMessage}`;
     }
 

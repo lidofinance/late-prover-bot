@@ -5,53 +5,55 @@ import { Metrics, getOrCreateMetric } from '@willsoto/nestjs-prometheus';
 import { Metric, Options } from './interfaces';
 import {
   METRICS_PREFIX,
+  METRIC_BATCH_PROCESSING_DURATION_SECONDS,
+  METRIC_BATCH_SIZE,
+  METRIC_BEACON_HEADER_FETCH_ERRORS_COUNT,
+  METRIC_BEACON_STATE_DESERIALIZATION_DURATION_SECONDS,
+  METRIC_BEACON_STATE_FETCH_DURATION_SECONDS,
+  METRIC_BLOCK_RANGE_PROCESSING_DURATION_SECONDS,
+  METRIC_BLOCK_RANGE_SIZE,
   METRIC_BUILD_INFO,
+  METRIC_CONTRACT_CALL_COUNT,
+  METRIC_CONTRACT_CALL_DURATION_SECONDS,
+  METRIC_CONTRACT_CALL_ERRORS_COUNT,
+  METRIC_CONTRACT_VERIFICATION_COUNT,
+  METRIC_CURRENT_PROOF_GENERATION_COUNT,
+  METRIC_DAEMON_CYCLE_DURATION_SECONDS,
+  METRIC_DAEMON_SLEEP_COUNT,
+  METRIC_EXIT_ALREADY_PROCESSED_COUNT,
+  METRIC_EXIT_DEADLINE_FUTURE_COUNT,
+  METRIC_EXIT_DEADLINE_MISSED_COUNT,
+  METRIC_EXIT_REQUESTS_FOUND_COUNT,
+  METRIC_EXIT_REQUESTS_PROCESSED_COUNT,
   METRIC_HIGH_GAS_FEE_INTERRUPTIONS_COUNT,
+  METRIC_HISTORICAL_PROOF_GENERATION_COUNT,
+  METRIC_MEMORY_USAGE_BYTES,
+  METRIC_NODE_OPERATOR_OPERATIONS_COUNT,
   METRIC_OUTGOING_CL_REQUESTS_COUNT,
   METRIC_OUTGOING_CL_REQUESTS_DURATION_SECONDS,
   METRIC_OUTGOING_EL_REQUESTS_COUNT,
   METRIC_OUTGOING_EL_REQUESTS_DURATION_SECONDS,
-  METRIC_TASK_DURATION_SECONDS,
-  METRIC_TASK_RESULT_COUNT,
-  METRIC_TRANSACTION_COUNTER,
-  METRIC_PROOF_GENERATION_DURATION_SECONDS,
   METRIC_PROOF_GENERATION_COUNT,
-  METRIC_HISTORICAL_PROOF_GENERATION_COUNT,
-  METRIC_CURRENT_PROOF_GENERATION_COUNT,
-  METRIC_VALIDATORS_PROCESSED_COUNT,
-  METRIC_VALIDATORS_SKIPPED_COUNT,
-  METRIC_VALIDATORS_ELIGIBLE_COUNT,
-  METRIC_VALIDATORS_PENALTY_APPLICABLE_COUNT,
-  METRIC_VALIDATOR_PROCESSING_DURATION_SECONDS,
-  METRIC_VALIDATOR_GROUP_PROCESSING_DURATION_SECONDS,
-  METRIC_CONTRACT_CALL_DURATION_SECONDS,
-  METRIC_CONTRACT_CALL_COUNT,
-  METRIC_CONTRACT_VERIFICATION_COUNT,
-  METRIC_BLOCK_RANGE_PROCESSING_DURATION_SECONDS,
-  METRIC_BLOCK_RANGE_SIZE,
-  METRIC_BATCH_PROCESSING_DURATION_SECONDS,
-  METRIC_BATCH_SIZE,
-  METRIC_EXIT_REQUESTS_FOUND_COUNT,
-  METRIC_EXIT_REQUESTS_PROCESSED_COUNT,
-  METRIC_VALIDATOR_STORAGE_SIZE,
-  METRIC_VALIDATOR_STORAGE_DEADLINE_SLOTS,
-  METRIC_VALIDATOR_STORAGE_CLEANUP_COUNT,
-  METRIC_MEMORY_USAGE_BYTES,
-  METRIC_EXIT_ALREADY_PROCESSED_COUNT,
-  METRIC_EXIT_DEADLINE_MISSED_COUNT,
-  METRIC_EXIT_DEADLINE_FUTURE_COUNT,
-  METRIC_BEACON_STATE_FETCH_DURATION_SECONDS,
-  METRIC_BEACON_STATE_DESERIALIZATION_DURATION_SECONDS,
-  METRIC_STAKING_MODULE_OPERATIONS_COUNT,
-  METRIC_NODE_OPERATOR_OPERATIONS_COUNT,
-  METRIC_DAEMON_CYCLE_DURATION_SECONDS,
-  METRIC_DAEMON_SLEEP_COUNT,
+  METRIC_PROOF_GENERATION_DURATION_SECONDS,
   METRIC_ROOTS_PROCESSING_DURATION_SECONDS,
   METRIC_ROOTS_SAME_COUNT,
   METRIC_SLOT_AGE_WARNINGS_COUNT,
+  METRIC_STAKING_MODULE_OPERATIONS_COUNT,
   METRIC_STATE_DESERIALIZATION_ERRORS_COUNT,
-  METRIC_BEACON_HEADER_FETCH_ERRORS_COUNT,
-  METRIC_CONTRACT_CALL_ERRORS_COUNT,
+  METRIC_TASK_DURATION_SECONDS,
+  METRIC_TASK_RESULT_COUNT,
+  METRIC_TRANSACTION_COUNTER,
+  METRIC_VALIDATORS_ELIGIBLE_COUNT,
+  METRIC_VALIDATORS_PENALTY_APPLICABLE_COUNT,
+  METRIC_VALIDATORS_PROCESSED_COUNT,
+  METRIC_VALIDATORS_SKIPPED_COUNT,
+  METRIC_VALIDATOR_GROUP_PROCESSING_DURATION_SECONDS,
+  METRIC_VALIDATOR_PROCESSING_DURATION_SECONDS,
+  METRIC_VALIDATOR_STORAGE_CLEANUP_COUNT,
+  METRIC_VALIDATOR_STORAGE_DEADLINE_SLOTS,
+  METRIC_VALIDATOR_STORAGE_MAX_SLOT,
+  METRIC_VALIDATOR_STORAGE_MIN_SLOT,
+  METRIC_VALIDATOR_STORAGE_SIZE,
 } from './prometheus.constants';
 
 // Re-export from decorators for backward compatibility
@@ -61,9 +63,7 @@ export { RequestStatus, TaskStatus, requestLabels } from './decorators';
 export class PrometheusService {
   private prefix = METRICS_PREFIX;
 
-  constructor(
-    @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
-  ) {}
+  constructor(@Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService) {}
 
   public getOrCreateMetric<T extends Metrics, L extends string>(type: T, options: Options<L>): Metric<T, L> {
     const nameWithPrefix = this.prefix + options.name;
@@ -74,10 +74,46 @@ export class PrometheusService {
     }) as Metric<T, L>;
   }
 
-  public buildInfo = this.getOrCreateMetric('Counter', {
+  public buildInfo = this.getOrCreateMetric('Gauge', {
     name: METRIC_BUILD_INFO,
     help: 'Build information',
-    labelNames: ['name', 'version', 'commit', 'branch', 'env', 'network'],
+    labelNames: [
+      'name',
+      'version',
+      'commit',
+      'branch',
+      'env',
+      'ACCOUNT',
+      'WORKING_MODE',
+      'START_ROOT',
+      'START_SLOT',
+      'START_EPOCH',
+      'LIDO_LOCATOR_ADDRESS',
+      'DAEMON_SLEEP_INTERVAL_MS',
+      'TX_MIN_GAS_PRIORITY_FEE',
+      'TX_MAX_GAS_PRIORITY_FEE',
+      'TX_GAS_PRIORITY_FEE_PERCENTILE',
+      'TX_GAS_FEE_HISTORY_DAYS',
+      'TX_GAS_FEE_HISTORY_PERCENTILE',
+      'TX_GAS_LIMIT',
+      'TX_SKIP_GAS_ESTIMATION',
+      'VALIDATOR_BATCH_SIZE',
+      'MAX_TRANSACTION_SIZE_BYTES',
+      'TX_MINING_WAITING_TIMEOUT_MS',
+      'TX_CONFIRMATIONS',
+      'HTTP_PORT',
+      'LOG_LEVEL',
+      'LOG_FORMAT',
+      'DRY_RUN',
+      'CHAIN_ID',
+      'EL_RPC_RETRY_DELAY_MS',
+      'EL_RPC_RESPONSE_TIMEOUT_MS',
+      'EL_RPC_MAX_RETRIES',
+      'CL_API_RETRY_DELAY_MS',
+      'CL_API_RESPONSE_TIMEOUT_MS',
+      'CL_API_MAX_RETRIES',
+      'FORK_NAME',
+    ],
   });
 
   public outgoingELRequestsDuration = this.getOrCreateMetric('Histogram', {
@@ -269,6 +305,18 @@ export class PrometheusService {
     labelNames: [],
   });
 
+  public validatorStorageMinSlot = this.getOrCreateMetric('Gauge', {
+    name: METRIC_VALIDATOR_STORAGE_MIN_SLOT,
+    help: 'Minimum deadline slot in validator storage',
+    labelNames: [],
+  });
+
+  public validatorStorageMaxSlot = this.getOrCreateMetric('Gauge', {
+    name: METRIC_VALIDATOR_STORAGE_MAX_SLOT,
+    help: 'Maximum deadline slot in validator storage',
+    labelNames: [],
+  });
+
   public validatorStorageCleanupCount = this.getOrCreateMetric('Counter', {
     name: METRIC_VALIDATOR_STORAGE_CLEANUP_COUNT,
     help: 'Count of validator storage cleanup operations',
@@ -378,12 +426,25 @@ export class PrometheusService {
     help: 'Count of contract call errors',
     labelNames: ['contract_type', 'method', 'error_type'],
   });
+
+  public latestSlot = this.getOrCreateMetric('Gauge', {
+    name: 'latest_slot_number',
+    help: 'Latest beacon slot number observed',
+    labelNames: [],
+  });
+
+  public balanceEth = this.getOrCreateMetric('Gauge', {
+    name: 'balance_eth',
+    help: 'Bot balance in ETH',
+    labelNames: [],
+  });
+
+  public latestSuccessRun = this.getOrCreateMetric('Gauge', {
+    name: 'latest_success_run_timestamp',
+    help: 'Timestamp of the latest successful run',
+    labelNames: [],
+  });
 }
 
 // Export the refactored decorators
-export { 
-  TrackCLRequest,
-  TrackTask, 
-  TrackWorker,
-  TrackMetric
-} from './decorators';
+export { TrackCLRequest, TrackTask, TrackWorker, TrackMetric } from './decorators';

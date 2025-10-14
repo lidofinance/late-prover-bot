@@ -1,12 +1,11 @@
-import { join } from 'path';
-
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
 
+import { LidoLocatorContract } from './lido-locator.service';
 import { ExitRequestsData, HistoricalHeaderWitness, ProvableBeaconBlockHeader, ValidatorWitness } from './types';
 import { ConfigService } from '../config/config.service';
+import contractJson from '../contracts/abi/validator-exit-delay-verifier.json';
 import { Execution } from '../providers/execution/execution';
-import { LidoLocatorContract } from './lido-locator.service';
 
 @Injectable()
 export class VerifierContract implements OnModuleInit {
@@ -25,11 +24,6 @@ export class VerifierContract implements OnModuleInit {
       // Get ValidatorExitDelayVerifier address from LidoLocator
       this.verifierAddress = await this.lidoLocator.getValidatorExitDelayVerifier();
       this.logger.log(`ValidatorExitDelayVerifier address from LidoLocator: ${this.verifierAddress}`);
-
-      // Import the full ABI JSON
-      const contractJson = require(
-        join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-delay-verifier.json'),
-      );
 
       // Create interface from the ABI
       const iface = new ethers.utils.Interface(contractJson);
@@ -70,7 +64,7 @@ export class VerifierContract implements OnModuleInit {
     return await this.contract.populateTransaction.verifyValidatorExitDelay(
       beaconBlock,
       validatorWitnesses,
-      exitRequests
+      exitRequests,
     );
   }
 
@@ -81,7 +75,12 @@ export class VerifierContract implements OnModuleInit {
     exitRequests: ExitRequestsData,
   ): Promise<any> {
     // Emulation call for the execution service
-    return await this.contract.callStatic.verifyHistoricalValidatorExitDelay(beaconBlock, oldBlock, validatorWitnesses, exitRequests);
+    return await this.contract.callStatic.verifyHistoricalValidatorExitDelay(
+      beaconBlock,
+      oldBlock,
+      validatorWitnesses,
+      exitRequests,
+    );
   }
 
   public async populateVerifyHistoricalValidatorExitDelay(
@@ -94,8 +93,7 @@ export class VerifierContract implements OnModuleInit {
       beaconBlock,
       oldBlock,
       validatorWitnesses,
-      exitRequests
+      exitRequests,
     );
   }
-
 }

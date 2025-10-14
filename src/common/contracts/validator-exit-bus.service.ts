@@ -1,11 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BigNumber, ethers } from 'ethers';
-import { Execution } from '../providers/execution/execution';
+
 import { LidoLocatorContract } from './lido-locator.service';
 import { ExitRequestsData } from './types';
-import { join } from 'path';
-import { PrometheusService } from '../prometheus/prometheus.service';
+import veboJson from '../contracts/abi/validator-exit-bus-oracle.json';
+import vebJson from '../contracts/abi/validator-exit-bus.json';
 import { getSizeRangeCategory } from '../prometheus/decorators';
+import { PrometheusService } from '../prometheus/prometheus.service';
+import { Execution } from '../providers/execution/execution';
 
 interface ReportData {
   consensusVersion: number;
@@ -31,7 +33,7 @@ export class ExitRequestsContract implements OnModuleInit {
     protected readonly execution: Execution,
     protected readonly lidoLocator: LidoLocatorContract,
     protected readonly prometheus: PrometheusService,
-  ) { }
+  ) {}
 
   async onModuleInit(): Promise<void> {
     try {
@@ -39,18 +41,11 @@ export class ExitRequestsContract implements OnModuleInit {
       this.exitBusAddress = await this.lidoLocator.getValidatorsExitBusOracle();
       this.logger.log(`ValidatorsExitBusOracle address from LidoLocator: ${this.exitBusAddress}`);
 
-      // Import the full ABI JSON
-      const veboJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus-oracle.json'));
-      const vebJson = require(join(process.cwd(), 'src', 'common', 'contracts', 'abi', 'validator-exit-bus.json'));
       // Create interface from the ABI
       const veboIface = new ethers.utils.Interface(veboJson);
       this.vebIface = new ethers.utils.Interface(vebJson);
 
-      this.veboContract = new ethers.Contract(
-        this.exitBusAddress,
-        veboIface,
-        this.execution.provider,
-      );
+      this.veboContract = new ethers.Contract(this.exitBusAddress, veboIface, this.execution.provider);
 
       this.logger.log('ExitRequestsContract initialized successfully');
     } catch (error) {
@@ -63,17 +58,14 @@ export class ExitRequestsContract implements OnModuleInit {
     const startTime = Date.now();
     const blockRange = toBlock - fromBlock;
     const rangeSizeCategory = getSizeRangeCategory(blockRange);
-    
+
     // Track batch processing for exit requests
     const stopBatchTimer = this.prometheus.batchProcessingDuration.startTimer({
-      batch_size_range: rangeSizeCategory
+      batch_size_range: rangeSizeCategory,
     });
-    
+
     // Track batch size
-    this.prometheus.batchSize.observe(
-      { processing_type: 'exit_requests_fetch' },
-      blockRange
-    );
+    this.prometheus.batchSize.observe({ processing_type: 'exit_requests_fetch' }, blockRange);
 
     try {
       this.validateBlockRange(fromBlock, toBlock);
@@ -84,26 +76,32 @@ export class ExitRequestsContract implements OnModuleInit {
       const events = await this.veboContract.queryFilter(
         this.veboContract.filters.ExitDataProcessing(),
         fromBlock,
-        toBlock
+        toBlock,
       );
 
       if (events.length === 0) {
         this.logger.debug('No exit data processing events found in the specified range');
-        
+
         // Track zero exit requests found
-        this.prometheus.exitRequestsFoundCount.inc({
-          block_range_type: rangeSizeCategory
-        }, 0);
-        
+        this.prometheus.exitRequestsFoundCount.inc(
+          {
+            block_range_type: rangeSizeCategory,
+          },
+          0,
+        );
+
         return [];
       }
 
       this.logger.debug(`Found ${events.length} exit data processing events`);
-      
+
       // Track exit requests found
-      this.prometheus.exitRequestsFoundCount.inc({
-        block_range_type: rangeSizeCategory
-      }, events.length);
+      this.prometheus.exitRequestsFoundCount.inc(
+        {
+          block_range_type: rangeSizeCategory,
+        },
+        events.length,
+      );
 
       const results: ExitRequestsResult[] = [];
       const transactionCache = new Map<string, ethers.providers.TransactionResponse>();
@@ -171,12 +169,17 @@ export class ExitRequestsContract implements OnModuleInit {
             const requestStruct = decodedData.request || decodedData[0];
             if (!requestStruct || !requestStruct.data) {
               this.logger.error(
-                `Request struct from ${decodeMethod} is invalid or missing 'data' property: ` + JSON.stringify({
-                  txHash,
-                  decodeMethod,
-                  requestStruct,
-                  decodedDataKeys: Object.keys(decodedData)
-                }, null, 2)
+                `Request struct from ${decodeMethod} is invalid or missing 'data' property: ` +
+                  JSON.stringify(
+                    {
+                      txHash,
+                      decodeMethod,
+                      requestStruct,
+                      decodedDataKeys: Object.keys(decodedData),
+                    },
+                    null,
+                    2,
+                  ),
               );
               continue;
             }
@@ -185,19 +188,24 @@ export class ExitRequestsContract implements OnModuleInit {
               refSlot: 0, // Not available in submitExitRequestsData
               requestsCount: 0, // Not available in submitExitRequestsData
               dataFormat: requestStruct.dataFormat,
-              data: requestStruct.data
+              data: requestStruct.data,
             };
           } else {
             // For submitReportData, access data directly
             if (!decodedData || typeof decodedData !== 'object' || !('data' in decodedData)) {
               this.logger.error(
-                `Decoded data from ${decodeMethod} is invalid or missing 'data' property: ` + JSON.stringify({
-                  txHash,
-                  decodeMethod,
-                  txData: tx.data,
-                  decodedData,
-                  decodedDataKeys: decodedData && typeof decodedData === 'object' ? Object.keys(decodedData) : null
-                }, null, 2)
+                `Decoded data from ${decodeMethod} is invalid or missing 'data' property: ` +
+                  JSON.stringify(
+                    {
+                      txHash,
+                      decodeMethod,
+                      txData: tx.data,
+                      decodedData,
+                      decodedDataKeys: decodedData && typeof decodedData === 'object' ? Object.keys(decodedData) : null,
+                    },
+                    null,
+                    2,
+                  ),
               );
               continue;
             }
@@ -221,40 +229,30 @@ export class ExitRequestsContract implements OnModuleInit {
       }
 
       // Track processing results
-      this.prometheus.exitRequestsProcessedCount.inc(
-        { status: 'success' },
-        processedCount
-      );
-      
+      this.prometheus.exitRequestsProcessedCount.inc({ status: 'success' }, processedCount);
+
       if (errorCount > 0) {
-        this.prometheus.exitRequestsProcessedCount.inc(
-          { status: 'error' },
-          errorCount
-        );
+        this.prometheus.exitRequestsProcessedCount.inc({ status: 'error' }, errorCount);
       }
 
       const totalDuration = Date.now() - startTime;
       this.logger.debug(
         `Exit requests processing completed:` +
-        `\n  Block range: ${fromBlock}-${toBlock} (${blockRange} blocks)` +
-        `\n  Events found: ${events.length}` +
-        `\n  Successfully processed: ${processedCount}` +
-        `\n  Errors: ${errorCount}` +
-        `\n  Total duration: ${totalDuration}ms` +
-        `\n  Avg per event: ${events.length > 0 ? (totalDuration / events.length).toFixed(2) : 0}ms`
+          `\n  Block range: ${fromBlock}-${toBlock} (${blockRange} blocks)` +
+          `\n  Events found: ${events.length}` +
+          `\n  Successfully processed: ${processedCount}` +
+          `\n  Errors: ${errorCount}` +
+          `\n  Total duration: ${totalDuration}ms` +
+          `\n  Avg per event: ${events.length > 0 ? (totalDuration / events.length).toFixed(2) : 0}ms`,
       );
 
       return results;
-
     } catch (error) {
       this.logger.error(`Failed to fetch exit requests from blocks ${fromBlock}-${toBlock}:`, error);
-      
+
       // Track error in exit requests processing
-      this.prometheus.exitRequestsProcessedCount.inc(
-        { status: 'fetch_error' },
-        1
-      );
-      
+      this.prometheus.exitRequestsProcessedCount.inc({ status: 'fetch_error' }, 1);
+
       throw error;
     } finally {
       stopBatchTimer();
@@ -263,36 +261,36 @@ export class ExitRequestsContract implements OnModuleInit {
 
   public async getExitRequestDeliveryTimestamp(exitRequestsHash: string): Promise<number> {
     const startTime = Date.now();
-    
+
     // Track veboContract call for delivery timestamp
     const stopContractTimer = this.prometheus.contractCallDuration.startTimer({
       contract_type: 'exit_bus',
-      method: 'getDeliveryTimestamp'
+      method: 'getDeliveryTimestamp',
     });
-    
+
     try {
       const timestamp = await this.veboContract.getDeliveryTimestamp(exitRequestsHash);
-      
+
       this.prometheus.contractCallCount.inc({
         contract_type: 'exit_bus',
         method: 'getDeliveryTimestamp',
-        status: 'success'
+        status: 'success',
       });
-      
+
       const duration = Date.now() - startTime;
-      if (duration > 2000) { // Log slow calls
+      if (duration > 2000) {
+        // Log slow calls
         this.logger.debug(`Slow delivery timestamp fetch: ${duration}ms for hash ${exitRequestsHash}`);
       }
-      
+
       return timestamp.toNumber();
-      
     } catch (error) {
       this.prometheus.contractCallCount.inc({
         contract_type: 'exit_bus',
         method: 'getDeliveryTimestamp',
-        status: 'error'
+        status: 'error',
       });
-      
+
       this.logger.error(`Failed to get delivery timestamp for ${exitRequestsHash}:`, error);
       throw error;
     } finally {
@@ -304,11 +302,11 @@ export class ExitRequestsContract implements OnModuleInit {
     if (fromBlock < 0 || toBlock < 0) {
       throw new Error('Block numbers must be non-negative');
     }
-    
+
     if (fromBlock > toBlock) {
       throw new Error('fromBlock must be less than or equal to toBlock');
     }
-    
+
     if (toBlock - fromBlock > 100000) {
       this.logger.warn(`Large block range detected: ${toBlock - fromBlock} blocks`);
     }

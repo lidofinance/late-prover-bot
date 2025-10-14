@@ -1,10 +1,12 @@
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 
-import { ConfigService } from '../../common/config/config.service';
-import { Consensus } from "../../common/providers/consensus/consensus";
-import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
+import { PrometheusService } from 'common/prometheus';
+
 import { LastProcessedRoot } from './last-processed-root';
+import { ConfigService } from '../../common/config/config.service';
+import { Consensus } from '../../common/providers/consensus/consensus';
+import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
 
 @Injectable()
 export class RootsProvider {
@@ -12,8 +14,9 @@ export class RootsProvider {
     @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
     protected readonly config: ConfigService,
     protected readonly consensus: Consensus,
+    protected readonly prometheus: PrometheusService,
     protected readonly lastProcessedRoot: LastProcessedRoot,
-  ) { }
+  ) {}
 
   /**
    * Get both PREV and LATEST roots.
@@ -23,9 +26,9 @@ export class RootsProvider {
    * 3. Fallback to START_SLOT from env (beacon slot number)
    * 4. Fallback to START_EPOCH from env (beacon epoch number)
    * 5. Fallback to parent of finalized root
-   * 
+   *
    * LATEST is always the finalized root.
-   * 
+   *
    * Returns undefined if failed to get finalized header.
    */
   public async getRoots(): Promise<{ prev: BlockHeaderResponse; latest: BlockHeaderResponse } | undefined> {
@@ -43,16 +46,20 @@ export class RootsProvider {
       return undefined;
     }
 
+    const latestSlot = finalized.header.message.slot;
+
     this.logger.debug?.('Roots:', {
       prev: prev.root,
       latest: finalized.root,
       prevSlot: prev.header.message.slot,
-      latestSlot: finalized.header.message.slot
+      latestSlot: latestSlot,
     });
+
+    this.prometheus.latestSlot.set(Number(latestSlot));
 
     return {
       prev,
-      latest: finalized
+      latest: finalized,
     };
   }
 
@@ -119,8 +126,4 @@ export class RootsProvider {
     this.logger.warn('Failed to get parent of finalized root');
     return undefined;
   }
-
-  
-
-
 }

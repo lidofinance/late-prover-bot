@@ -13,20 +13,22 @@ import { RequestOptions } from '../base/utils/func';
 
 let ssz: typeof sszType;
 
-export const SupportedFork = {
-  capella: 'capella',
-  deneb: 'deneb',
-  electra: 'electra',
-};
+enum SupportedFork {
+  capella = 'capella',
+  deneb = 'deneb',
+  electra = 'electra',
+  fulu = 'fulu',
+}
 
 export type SupportedBlock =
   | ValueOfFields<typeof ssz.capella.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.deneb.BeaconBlock.fields>
-  | ValueOfFields<typeof ssz.electra.BeaconBlock.fields>;
+  | ValueOfFields<typeof ssz.electra.BeaconBlock.fields>
+  | ValueOfFields<typeof ssz.fulu.BeaconBlock.fields>;
 
 export interface State {
   bodyBytes: Uint8Array;
-  forkName: keyof typeof SupportedFork;
+  forkName: SupportedFork;
 }
 
 @Injectable()
@@ -96,11 +98,11 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
       this.baseGet(baseUrl, this.endpoints.blockInfo(blockId)),
     );
     const forkName = this.getForkName(headers);
-    if (!(forkName in SupportedFork)) {
+    if (!Object.values(SupportedFork).includes(forkName as SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const jsonBody = (await body.json()) as { data: { message: JSON } };
-    return ssz[forkName as keyof typeof SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
+    return ssz[forkName as SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
   }
 
   public async getBeaconHeader(blockId: BlockId): Promise<BlockHeaderResponse> {
@@ -120,11 +122,11 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     this.logger.log(`Getting state response for state id [${stateId}]`);
     const { body, headers } = await requestPromise;
     const forkName = this.getForkName(headers);
-    if (!(forkName in SupportedFork)) {
+    if (!Object.values(SupportedFork).includes(forkName as SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const bodyBytes = await body.bytes();
-    return { bodyBytes, forkName: forkName as keyof typeof SupportedFork };
+    return { bodyBytes, forkName: forkName as SupportedFork };
   }
 
   @TrackCLRequest()
@@ -142,7 +144,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     if (headerForkName) {
       return headerForkName;
     }
-    
+
     // Fallback to environment variable (defaults to 'electra')
     return this.config.get('FORK_NAME') as string;
   }

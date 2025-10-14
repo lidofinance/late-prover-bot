@@ -65,4 +65,4 @@ export type TaskTrackingOptions = {
   logProgress?: boolean;
   logMemoryUsage?: boolean;
   customLabels?: MetricLabels;
-}; 
+};
