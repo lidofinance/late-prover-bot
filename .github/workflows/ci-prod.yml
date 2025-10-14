@@ -22,5 +22,5 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           TARGET_REPO: "lidofinance/infra-mainnet"
           TAG: "${{ github.event.release.tag_name }}"
-          # TARGET_WORKFLOW: "build_mainnet_csm_prover_tool.yaml"
+          TARGET_WORKFLOW: "build_mainnet_late_prover_bot.yaml"
 
