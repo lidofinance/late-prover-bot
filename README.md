@@ -147,8 +147,8 @@ yarn run start:prod
 | `TX_GAS_PRIORITY_FEE_PERCENTILE` | Gas priority fee percentile | no | `25` |
 | `TX_GAS_FEE_HISTORY_DAYS` | Days of gas fee history | no | `1` |
 | `TX_GAS_FEE_HISTORY_PERCENTILE` | Gas fee history percentile | no | `50` |
-| `TX_GAS_LIMIT` | Gas limit for transactions | no | `2000000` |
-| `TX_SKIP_GAS_ESTIMATION` | Skip gas estimation and use fixed limit | no | `false` |
+| `TX_GAS_LIMIT` | Minimum gas limit for transactions (bot may use more based on estimation) | no | `2000000` |
+| `TX_SKIP_GAS_ESTIMATION` | Skip gas estimation and always use fixed TX_GAS_LIMIT | no | `false` |
 | `VALIDATOR_BATCH_SIZE` | Maximum validators per transaction | no | `50` |
 | `MAX_TRANSACTION_SIZE_BYTES` | Maximum transaction size in bytes | no | `100000` |
 | `TX_MINING_WAITING_TIMEOUT_MS` | Transaction mining timeout | no | `3600000` (1 hour) |
@@ -173,13 +173,43 @@ curl http://localhost:8081/health
 
 ### Gas-Related Errors
 
+#### How Gas Limit Works
+
+The bot uses **dynamic gas estimation** by default:
+
+1. **Estimates gas** required for each transaction using `eth_estimateGas`
+2. **Adds 20% buffer** to account for gas variation
+3. **Compares with configured limit**: Uses the **higher** of estimated or configured value
+4. **Warns if estimated exceeds configured** limit
+
+**Example behavior:**
+- Configured: `TX_GAS_LIMIT=2000000`
+- Estimated: `1,800,000` gas
+- Used: `2,160,000` gas (1.8M × 1.2 buffer)
+- If estimated: `2,500,000` gas
+  - Used: `3,000,000` gas (2.5M × 1.2 buffer)
+  - ⚠️ Warning logged: "Consider increasing TX_GAS_LIMIT"
+
 #### UNPREDICTABLE_GAS_LIMIT Error
 If you encounter `UNPREDICTABLE_GAS_LIMIT` errors:
 
-1. **Increase gas limit**: Set `TX_GAS_LIMIT=2500000` (or higher)
-2. **Skip gas estimation**: Set `TX_SKIP_GAS_ESTIMATION=true` to use fixed gas limits
-3. **Check contract state**: Ensure your validators and exit requests are valid
-4. **Network issues**: Verify your RPC endpoints are stable and responsive
+1. **Check logs**: Look for the estimated gas amount before the error
+2. **Increase gas limit**: Set `TX_GAS_LIMIT` to estimated × 1.5 for safety
+3. **Skip gas estimation**: Set `TX_SKIP_GAS_ESTIMATION=true` to use fixed gas limits
+4. **Check contract state**: Ensure your validators and exit requests are valid
+5. **Network issues**: Verify your RPC endpoints are stable and responsive
+
+#### Out of Gas / Transaction Reverted
+If your transaction passes checks but reverts with "out of gas":
+
+1. **Check logs for gas warnings**: Look for messages about estimated gas exceeding limit
+2. **Increase configured limit**: The bot will automatically use the higher amount
+   ```bash
+   # If logs show "Estimated gas (with buffer): 2,500,000"
+   TX_GAS_LIMIT=2500000
+   ```
+3. **Consider batch size**: Reduce `VALIDATOR_BATCH_SIZE` if transactions are too large
+4. **Use fixed limit**: Set `TX_SKIP_GAS_ESTIMATION=true` and a high `TX_GAS_LIMIT`
 
 #### Intrinsic Gas Too Low Error
 If you see "intrinsic gas too low: gas X, minimum needed Y":
@@ -189,14 +219,16 @@ If you see "intrinsic gas too low: gas X, minimum needed Y":
    # If error shows "minimum needed 1588836"
    TX_GAS_LIMIT=1906600  # 1588836 * 1.2
    ```
-2. **Enable dynamic estimation**: Set `TX_SKIP_GAS_ESTIMATION=false` (default)
+2. **Enable dynamic estimation**: Ensure `TX_SKIP_GAS_ESTIMATION=false` (default)
 3. **Check batch size**: Larger batches need more gas - consider reducing `VALIDATOR_BATCH_SIZE`
 
 #### Gas Limit Guidelines by Batch Size
-- **1-10 validators**: `TX_GAS_LIMIT=1000000`
-- **11-25 validators**: `TX_GAS_LIMIT=1500000` 
-- **26-50 validators**: `TX_GAS_LIMIT=2000000`
+- **1-10 validators**: `TX_GAS_LIMIT=1000000` (bot will use more if needed)
+- **11-25 validators**: `TX_GAS_LIMIT=1500000` (bot will use more if needed)
+- **26-50 validators**: `TX_GAS_LIMIT=2000000` (bot will use more if needed)
 - **51+ validators**: `TX_GAS_LIMIT=2500000+` or reduce batch size
+
+**Note:** With dynamic estimation (default), these are **minimum safety values**. The bot will automatically use more gas if estimation suggests it's needed.
 
 ### Oversized Transaction Error
 

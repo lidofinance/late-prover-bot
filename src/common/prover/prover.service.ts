@@ -934,25 +934,120 @@ export class ProverService implements OnModuleInit {
         `\n  Deadline slots processed: ${eligibleEntries.length}`,
     );
 
-    // Remove processed entries from storage
-    this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
+    // Remove processed entries from storage (only validators where exit key is reported)
+    await this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
   }
 
   /**
    * Clean up processed entries from storage
+   * Only removes validators where isValidatorExitingKeyReported returns true
    */
-  private cleanupProcessedEntries(eligibleEntries: Array<[number, any[]]>, fromBlock: number, toBlock: number): void {
-    for (const [deadlineSlot] of eligibleEntries) {
-      this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+  private async cleanupProcessedEntries(
+    eligibleEntries: Array<[number, any[]]>,
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<void> {
+    let totalValidatorsChecked = 0;
+    let totalValidatorsRemoved = 0;
+    let totalSlotsRemoved = 0;
+
+    for (const [deadlineSlot, groupDataArray] of eligibleEntries) {
+      // Collect all validators for this deadline slot
+      const allValidators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[] = [];
+
+      for (const groupData of groupDataArray) {
+        allValidators.push(...groupData.validators);
+      }
+
+      // Check each validator to see if exit key has been reported
+      const remainingValidators: typeof allValidators = [];
+      
+      for (const validatorData of allValidators) {
+        totalValidatorsChecked++;
+        const { validator } = validatorData;
+        
+        try {
+          const moduleContract = this.getContractForModule(Number(validator.moduleId));
+          const isReported = await moduleContract.isValidatorExitingKeyReported(validator.validatorPubkey);
+          
+          if (isReported) {
+            totalValidatorsRemoved++;
+            this.loggerService.debug?.(
+              `[Blocks ${fromBlock}-${toBlock}] Validator exit key reported, removing from storage:` +
+                `\n  Validator index: ${validator.validatorIndex}` +
+                `\n  Public key: ${validator.validatorPubkey}` +
+                `\n  Deadline slot: ${deadlineSlot}`,
+            );
+          } else {
+            // Keep validator in storage if not yet reported
+            remainingValidators.push(validatorData);
+            this.loggerService.debug?.(
+              `[Blocks ${fromBlock}-${toBlock}] Validator exit key NOT reported yet, keeping in storage:` +
+                `\n  Validator index: ${validator.validatorIndex}` +
+                `\n  Public key: ${validator.validatorPubkey}` +
+                `\n  Deadline slot: ${deadlineSlot}`,
+            );
+          }
+        } catch (error) {
+          // If check fails, keep validator in storage to be safe
+          this.loggerService.warn(
+            `[Blocks ${fromBlock}-${toBlock}] Failed to check isValidatorExitingKeyReported, keeping validator in storage:` +
+              `\n  Validator index: ${validator.validatorIndex}` +
+              `\n  Error: ${this.getErrorReference(error)}`,
+          );
+          remainingValidators.push(validatorData);
+        }
+      }
+
+      // Update storage: remove slot if all validators are reported, otherwise update with remaining validators
+      if (remainingValidators.length === 0) {
+        // All validators reported, remove the entire deadline slot
+        this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+        totalSlotsRemoved++;
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] All validators reported for deadline slot ${deadlineSlot}, removing slot from storage`,
+        );
+      } else {
+        // Some validators not yet reported, update storage with remaining validators
+        const updatedGroupDataArray = groupDataArray.map((groupData) => {
+          const remainingForThisGroup = remainingValidators.filter((v) =>
+            groupData.validators.some((gv: any) => gv.validator.validatorIndex === v.validator.validatorIndex),
+          );
+          
+          return {
+            ...groupData,
+            validators: remainingForThisGroup,
+          };
+        }).filter((groupData) => groupData.validators.length > 0);
+
+        if (updatedGroupDataArray.length > 0) {
+          this.validatorsByDeadlineSlotStorage.set(deadlineSlot, updatedGroupDataArray);
+          this.loggerService.log(
+            `[Blocks ${fromBlock}-${toBlock}] Deadline slot ${deadlineSlot} updated:` +
+              `\n  Validators remaining: ${remainingValidators.length}` +
+              `\n  Validators removed: ${allValidators.length - remainingValidators.length}`,
+          );
+        } else {
+          this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+          totalSlotsRemoved++;
+        }
+      }
     }
 
     // Update metrics after cleanup
     this.updateValidatorStorageMetrics();
 
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +
-        `\n  Entries removed: ${eligibleEntries.length}` +
-        `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`,
+      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage based on reported exit keys:` +
+        `\n  Validators checked: ${totalValidatorsChecked}` +
+        `\n  Validators removed: ${totalValidatorsRemoved}` +
+        `\n  Validators remaining: ${totalValidatorsChecked - totalValidatorsRemoved}` +
+        `\n  Deadline slots removed: ${totalSlotsRemoved}` +
+        `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
     );
   }
 
