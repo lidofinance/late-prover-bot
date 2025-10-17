@@ -68,6 +68,15 @@ export class ExitRequestsContract implements OnModuleInit {
     this.prometheus.batchSize.observe({ processing_type: 'exit_requests_fetch' }, blockRange);
 
     try {
+      // Check for invalid block range and skip processing if invalid
+      if (fromBlock > toBlock) {
+        this.logger.warn(
+          `Skipping block range processing: fromBlock (${fromBlock}) > toBlock (${toBlock}). ` +
+            `This may indicate a chain reorg.`,
+        );
+        return [];
+      }
+
       this.validateBlockRange(fromBlock, toBlock);
 
       this.logger.debug(`Fetching exit requests from block ${fromBlock} to ${toBlock}`);
@@ -301,10 +310,6 @@ export class ExitRequestsContract implements OnModuleInit {
   private validateBlockRange(fromBlock: number, toBlock: number): void {
     if (fromBlock < 0 || toBlock < 0) {
       throw new Error('Block numbers must be non-negative');
-    }
-
-    if (fromBlock > toBlock) {
-      throw new Error('fromBlock must be less than or equal to toBlock');
     }
 
     if (toBlock - fromBlock > 100000) {
