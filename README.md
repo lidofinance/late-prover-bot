@@ -161,6 +161,45 @@ yarn run start:prod
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | no | `info` |
 | `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
 
+## Gas Cost Estimation Tool
+
+Before running the bot, you can estimate current gas costs on mainnet using the standalone gas estimation script:
+
+```bash
+# Basic usage (uses default public RPC)
+yarn estimate-gas
+
+# With your own RPC
+EL_RPC_URLS=https://eth-mainnet.g.alchemy.com/v2/YOUR-KEY yarn estimate-gas
+
+# With custom configuration
+TX_GAS_FEE_HISTORY_DAYS=3 TX_GAS_FEE_HISTORY_PERCENTILE=75 yarn estimate-gas
+```
+
+**What it does:**
+- ✅ Fetches current mainnet base fee
+- ✅ Analyzes historical gas data (1 day by default)
+- ✅ Calculates recommended gas fee using percentile
+- ✅ Estimates costs for small/typical/large batches
+- ✅ Shows if bot would send transactions now
+- ✅ Displays costs in Gwei, ETH, and USD
+
+**Example output:**
+```
+Current base fee: 25.3 Gwei
+Recommended (50th percentile): 28.5 Gwei
+Status: ✅ ACCEPTABLE
+
+Typical Batch (~2.2M gas):
+  Gas Cost: 55,660,000 Gwei
+  ETH Cost: 0.055660 ETH
+  USD Cost: $138.35
+
+✅ DECISION: Bot would send transactions now.
+```
+
+See [scripts/README.md](scripts/README.md) for full documentation.
+
 ## Monitoring
 
 ### Health Check
