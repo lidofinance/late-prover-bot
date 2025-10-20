@@ -14,7 +14,7 @@ export class NodeOperatorsRegistryContract {
     const abi = [
       'function isValidatorExitDelayPenaltyApplicable(uint256,uint256,bytes,uint256) view returns (bool)',
       'function exitDeadlineThreshold(uint256) view returns (uint256)',
-      'function isValidatorExitingKeyReported(bytes _publicKey) public view returns (bool)'
+      'function isValidatorExitingKeyReported(bytes _publicKey) public view returns (bool)',
     ];
 
     this.contract = new ethers.Contract(address, abi, this.execution.provider);

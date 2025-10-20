@@ -6,6 +6,7 @@
   "author": "Lido Oracles Team",
   "private": true,
   "license": "GPL-3.0",
+  "packageManager": "yarn@1.22.22",
   "scripts": {
     "typechain": "typechain --target=ethers-v5 --out-dir src/common/contracts/types src/common/contracts/abi/*.json",
     "build": "nest build",

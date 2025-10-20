@@ -965,15 +965,15 @@ export class ProverService implements OnModuleInit {
 
       // Check each validator to see if exit key has been reported
       const remainingValidators: typeof allValidators = [];
-      
+
       for (const validatorData of allValidators) {
         totalValidatorsChecked++;
         const { validator } = validatorData;
-        
+
         try {
           const moduleContract = this.getContractForModule(Number(validator.moduleId));
           const isReported = await moduleContract.isValidatorExitingKeyReported(validator.validatorPubkey);
-          
+
           if (isReported) {
             totalValidatorsRemoved++;
             this.loggerService.debug?.(
@@ -1013,16 +1013,18 @@ export class ProverService implements OnModuleInit {
         );
       } else {
         // Some validators not yet reported, update storage with remaining validators
-        const updatedGroupDataArray = groupDataArray.map((groupData) => {
-          const remainingForThisGroup = remainingValidators.filter((v) =>
-            groupData.validators.some((gv: any) => gv.validator.validatorIndex === v.validator.validatorIndex),
-          );
-          
-          return {
-            ...groupData,
-            validators: remainingForThisGroup,
-          };
-        }).filter((groupData) => groupData.validators.length > 0);
+        const updatedGroupDataArray = groupDataArray
+          .map((groupData) => {
+            const remainingForThisGroup = remainingValidators.filter((v) =>
+              groupData.validators.some((gv: any) => gv.validator.validatorIndex === v.validator.validatorIndex),
+            );
+
+            return {
+              ...groupData,
+              validators: remainingForThisGroup,
+            };
+          })
+          .filter((groupData) => groupData.validators.length > 0);
 
         if (updatedGroupDataArray.length > 0) {
           this.validatorsByDeadlineSlotStorage.set(deadlineSlot, updatedGroupDataArray);
