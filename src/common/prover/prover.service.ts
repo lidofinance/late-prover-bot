@@ -381,7 +381,7 @@ export class ProverService implements OnModuleInit {
 
     // Check if this validator was already reported
     const wasReported = this.reportedValidatorPubkeys.has(validator.validatorPubkey);
-    
+
     const isPenaltyApplicable = await this.getContractForModule(
       Number(validator.moduleId),
     ).isValidatorExitDelayPenaltyApplicable(
