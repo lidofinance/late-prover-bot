@@ -44,6 +44,7 @@ class EmulatedCallError extends ErrorWithContext {}
 class SendTransactionError extends ErrorWithContext {}
 class HighGasFeeError extends ErrorWithContext {}
 class NoSignerError extends ErrorWithContext {}
+class GasLimitExceededError extends ErrorWithContext {}
 
 interface GasParameters {
   maxFeePerGas: bigint;
@@ -291,38 +292,36 @@ export class Execution {
   private async prepareTransaction(tx: PopulatedTransaction, context: TransactionContext): Promise<any> {
     const gasParameters = await this.calculateGasParameters();
 
-    // Estimate gas or use configured limit
-    let gasLimit: bigint;
-    const skipEstimation = this.config.get('TX_SKIP_GAS_ESTIMATION');
+    // Estimate gas limit
+    const estimated = await this.estimateGasLimit(tx);
+    const configuredLimit = BigInt(this.config.get('TX_GAS_LIMIT'));
 
-    if (skipEstimation) {
-      gasLimit = BigInt(this.config.get('TX_GAS_LIMIT'));
-      this.logger.log(`⚙️  Using fixed gas limit: ${gasLimit.toLocaleString()} (estimation skipped)`);
-    } else {
-      const estimated = await this.estimateGasLimit(tx);
-      const configuredLimit = BigInt(this.config.get('TX_GAS_LIMIT'));
+    // Calculate estimated gas with buffer
+    const ESTIMATION_BUFFER = 1.2; // 20% buffer
+    const estimatedWithBuffer = BigInt(Math.floor(Number(estimated) * ESTIMATION_BUFFER));
 
-      // Use the higher of estimated + buffer OR configured limit
-      const ESTIMATION_BUFFER = 1.2; // 20% buffer
-      const estimatedWithBuffer = BigInt(Math.floor(Number(estimated) * ESTIMATION_BUFFER));
-      gasLimit = estimatedWithBuffer > configuredLimit ? estimatedWithBuffer : configuredLimit;
+    // TX_GAS_LIMIT is a hard upper limit - reject if estimation exceeds it
+    if (estimatedWithBuffer > configuredLimit) {
+      const errorMessage =
+        `Transaction rejected: Estimated gas exceeds configured hard limit!` +
+        `\n  Estimated: ${estimated.toLocaleString()}` +
+        `\n  With 20% buffer: ${estimatedWithBuffer.toLocaleString()}` +
+        `\n  Configured hard limit (TX_GAS_LIMIT): ${configuredLimit.toLocaleString()}` +
+        `\n  Required: TX_GAS_LIMIT must be at least ${estimatedWithBuffer.toLocaleString()}` +
+        `\n  Action: Increase TX_GAS_LIMIT or reduce VALIDATOR_BATCH_SIZE`;
 
-      this.logger.log(
-        `📊 Gas limit decision:` +
-          `\n  Estimated: ${estimated.toLocaleString()}` +
-          `\n  With 20% buffer: ${estimatedWithBuffer.toLocaleString()}` +
-          `\n  Configured limit: ${configuredLimit.toLocaleString()}` +
-          `\n  Using: ${gasLimit.toLocaleString()}`,
-      );
-
-      // Warn if estimated is higher than configured
-      if (estimatedWithBuffer > configuredLimit) {
-        this.logger.warn(
-          `⚠️  Estimated gas (${estimatedWithBuffer.toLocaleString()}) exceeds configured limit (${configuredLimit.toLocaleString()})!` +
-            `\n  Consider increasing TX_GAS_LIMIT to at least ${estimatedWithBuffer.toLocaleString()}`,
-        );
-      }
+      throw new GasLimitExceededError(errorMessage, context);
     }
+
+    const gasLimit = estimatedWithBuffer;
+
+    this.logger.log(
+      `📊 Gas limit decision:` +
+        `\n  Estimated: ${estimated.toLocaleString()}` +
+        `\n  With 20% buffer: ${estimatedWithBuffer.toLocaleString()}` +
+        `\n  Configured hard limit: ${configuredLimit.toLocaleString()}` +
+        `\n  Using: ${gasLimit.toLocaleString()} ✅`,
+    );
 
     const populated = await this.signer!.populateTransaction({
       ...tx,

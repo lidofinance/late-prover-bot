@@ -70,10 +70,7 @@ export class ExitRequestsContract implements OnModuleInit {
     try {
       // Check for invalid block range and skip processing if invalid
       if (fromBlock > toBlock) {
-        this.logger.warn(
-          `Skipping block range processing: fromBlock (${fromBlock}) > toBlock (${toBlock}). ` +
-            `This may indicate a chain reorg.`,
-        );
+        this.logger.warn(`Skipping block range processing: fromBlock (${fromBlock}) > toBlock (${toBlock}).`);
         return [];
       }
 

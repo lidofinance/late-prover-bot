@@ -108,7 +108,17 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(`[Init ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
     // Initialize beacon state and headers
-    const { finalizedStateView } = await this.initializeBeaconState(fromBlock, toBlock);
+    const beaconState = await this.initializeBeaconState(fromBlock, toBlock);
+
+    // If beacon state deserialization failed, skip gracefully
+    if (!beaconState) {
+      this.loggerService.warn(
+        `[Init ${fromBlock}-${toBlock}] Skipping initialization due to beacon node data corruption`,
+      );
+      return;
+    }
+
+    const { finalizedStateView } = beaconState;
 
     // Process all batches and accumulate validators in storage (without processing eligible ones)
     await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
@@ -214,8 +224,28 @@ export class ProverService implements OnModuleInit {
       fork_name: deadlineState.forkName,
     });
 
-    const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
-    stopDeserialization();
+    let deadlineStateView;
+    try {
+      deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
+    } catch (error) {
+      this.prometheus.stateDeserializationErrorsCount.inc({
+        fork_name: deadlineState.forkName,
+      });
+
+      this.loggerService.error(
+        `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}:` +
+          `\n  Fork: ${deadlineState.forkName}` +
+          `\n  Data size: ${deadlineState.bodyBytes.length} bytes` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {
+        validatorWitnesses: [],
+        processedValidators: 0,
+        skippedValidators: validatorGroup.length,
+      };
+    } finally {
+      stopDeserialization();
+    }
 
     if (!deadlineStateView) {
       this.prometheus.stateDeserializationErrorsCount.inc({
@@ -500,6 +530,8 @@ export class ProverService implements OnModuleInit {
 
   /**
    * Initialize beacon state and headers for processing
+   * Returns null if unable to deserialize state (beacon node data corruption issue)
+   * Throws if unable to fetch state (network/API issue that should trigger alerts)
    */
   private async initializeBeaconState(
     fromBlock: number,
@@ -508,7 +540,7 @@ export class ProverService implements OnModuleInit {
     finalizedStateView: any;
     provableFinalizedBlockHeader: any;
     ssz: any;
-  }> {
+  } | null> {
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
     const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
@@ -525,7 +557,23 @@ export class ProverService implements OnModuleInit {
     };
 
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-    const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+
+    let finalizedStateView;
+    try {
+      finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+    } catch (error) {
+      this.prometheus.stateDeserializationErrorsCount.inc({
+        fork_name: state.forkName,
+      });
+      this.loggerService.error(
+        `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize finalized state (beacon node data corruption):` +
+          `\n  Fork: ${state.forkName}` +
+          `\n  Data size: ${state.bodyBytes.length} bytes` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
+          `\n  Skipping this cycle - will retry when beacon node data is healthy`,
+      );
+      return null;
+    }
 
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
 
@@ -736,9 +784,25 @@ export class ProverService implements OnModuleInit {
       const summaryIndex = this.calcSummaryIndex(deadlineSlot);
       const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
-
       const summaryState = await this.consensus.getState(summarySlot);
-      const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+
+      let summaryStateView;
+      try {
+        summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+      } catch (error) {
+        this.prometheus.stateDeserializationErrorsCount.inc({
+          fork_name: summaryState.forkName,
+        });
+        this.loggerService.error(
+          `❌ Historical batch ${i + 1}/${batches.length} skipped - Failed to deserialize summary state for slot ${summarySlot}:` +
+            `\n  Fork: ${summaryState.forkName}` +
+            `\n  Data size: ${summaryState.bodyBytes.length} bytes` +
+            `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
+            `\n  This is beacon node data corruption - skipping this batch`,
+        );
+        // Skip this batch but continue with others
+        continue;
+      }
 
       // Generate proof that this block's root exists in the historical summaries
       const proof = generateHistoricalStateProof(
@@ -1063,10 +1127,19 @@ export class ProverService implements OnModuleInit {
       this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
       // Initialize beacon state and headers
-      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(
-        fromBlock,
-        toBlock,
-      );
+      const beaconState = await this.initializeBeaconState(fromBlock, toBlock);
+
+      // If beacon state deserialization failed (beacon node data corruption), skip this cycle gracefully
+      if (!beaconState) {
+        this.loggerService.warn(
+          `[Blocks ${fromBlock}-${toBlock}] Skipping block processing due to beacon node data corruption` +
+            `\n  Will retry in next daemon cycle` +
+            `\n  Total time: ${Date.now() - startTime}ms`,
+        );
+        return; // Return gracefully without throwing - don't trigger error_recovery alert
+      }
+
+      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = beaconState;
 
       // Process all batches and accumulate validators in storage
       await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
