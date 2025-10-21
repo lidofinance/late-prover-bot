@@ -31,6 +31,9 @@ export class ProverService implements OnModuleInit {
     }[]
   >();
 
+  // Track validator pubkeys that have had proof transactions successfully submitted
+  private reportedValidatorPubkeys = new Set<string>();
+
   constructor(
     @Inject(LOGGER_PROVIDER) private readonly loggerService: LoggerService,
     protected readonly consensus: Consensus,
@@ -376,6 +379,9 @@ export class ProverService implements OnModuleInit {
         `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
     );
 
+    // Check if this validator was already reported
+    const wasReported = this.reportedValidatorPubkeys.has(validator.validatorPubkey);
+    
     const isPenaltyApplicable = await this.getContractForModule(
       Number(validator.moduleId),
     ).isValidatorExitDelayPenaltyApplicable(
@@ -397,13 +403,25 @@ export class ProverService implements OnModuleInit {
         reason: 'penalty_not_applicable',
       });
 
-      this.loggerService.log(
-        `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
-          `\n  Index: ${validatorIndex}` +
-          `\n  Public key: ${validator.validatorPubkey}` +
-          `\n  Validator node operator: ${validator.nodeOpId}` +
-          `\n  Validator module: ${validator.moduleId}`,
-      );
+      // If penalty is not applicable AND validator was previously reported,
+      // we can remove it from our tracking set and it will be cleaned from storage
+      if (wasReported) {
+        this.reportedValidatorPubkeys.delete(validator.validatorPubkey);
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] Validator penalty no longer applicable (was reported):` +
+            `\n  Index: ${validatorIndex}` +
+            `\n  Public key: ${validator.validatorPubkey}` +
+            `\n  Removed from tracking set - will be cleaned from storage`,
+        );
+      } else {
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
+            `\n  Index: ${validatorIndex}` +
+            `\n  Public key: ${validator.validatorPubkey}` +
+            `\n  Validator node operator: ${validator.nodeOpId}` +
+            `\n  Validator module: ${validator.moduleId}`,
+        );
+      }
 
       stopValidatorTimer();
       return null;
@@ -850,10 +868,16 @@ export class ProverService implements OnModuleInit {
           [provableFinalizedBlockHeader, oldBlock, batch, exitRequest.exitRequestsData],
         );
 
+        // Transaction successful - add all validator pubkeys to reported set
+        for (const witness of batch) {
+          this.reportedValidatorPubkeys.add(witness.pubkey);
+        }
+
         this.loggerService.log(
           `✅ Historical batch ${i + 1}/${batches.length} completed:` +
             `\n  Slot: ${deadlineSlot}` +
             `\n  Validators: ${batch.length}` +
+            `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Processing time: ${Date.now() - batchStartTime}ms`,
         );
       } catch (error) {
@@ -922,9 +946,15 @@ export class ProverService implements OnModuleInit {
           [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData],
         );
 
+        // Transaction successful - add all validator pubkeys to reported set
+        for (const witness of batch) {
+          this.reportedValidatorPubkeys.add(witness.pubkey);
+        }
+
         this.loggerService.log(
           `[Blocks ${fromBlock}-${toBlock}] ✅ Batch ${i + 1}/${batches.length} completed:` +
             `\n  Validators: ${batch.length}` +
+            `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
             `\n  Total batch time: ${Date.now() - batchStartTime}ms`,
         );
@@ -998,13 +1028,13 @@ export class ProverService implements OnModuleInit {
         `\n  Deadline slots processed: ${eligibleEntries.length}`,
     );
 
-    // Remove processed entries from storage (only validators where exit key is reported)
+    // Remove processed entries from storage (validators no longer tracked after penalty check)
     await this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
   }
 
   /**
    * Clean up processed entries from storage
-   * Only removes validators where isValidatorExitingKeyReported returns true
+   * Removes validators that are no longer in the reported set (penalty no longer applicable)
    */
   private async cleanupProcessedEntries(
     eligibleEntries: Array<[number, any[]]>,
@@ -1027,43 +1057,36 @@ export class ProverService implements OnModuleInit {
         allValidators.push(...groupData.validators);
       }
 
-      // Check each validator to see if exit key has been reported
+      // Check each validator - remove if NOT in reported set (penalty no longer applicable)
       const remainingValidators: typeof allValidators = [];
 
       for (const validatorData of allValidators) {
         totalValidatorsChecked++;
         const { validator } = validatorData;
 
-        try {
-          const moduleContract = this.getContractForModule(Number(validator.moduleId));
-          const isReported = await moduleContract.isValidatorExitingKeyReported(validator.validatorPubkey);
+        // If validator is NOT in reported set, it means:
+        // - Either it was never reported (shouldn't be in eligible entries, but keep it)
+        // - Or it WAS reported but penalty is no longer applicable (was removed from set)
+        const isStillTracked = this.reportedValidatorPubkeys.has(validator.validatorPubkey);
 
-          if (isReported) {
-            totalValidatorsRemoved++;
-            this.loggerService.debug?.(
-              `[Blocks ${fromBlock}-${toBlock}] Validator exit key reported, removing from storage:` +
-                `\n  Validator index: ${validator.validatorIndex}` +
-                `\n  Public key: ${validator.validatorPubkey}` +
-                `\n  Deadline slot: ${deadlineSlot}`,
-            );
-          } else {
-            // Keep validator in storage if not yet reported
-            remainingValidators.push(validatorData);
-            this.loggerService.debug?.(
-              `[Blocks ${fromBlock}-${toBlock}] Validator exit key NOT reported yet, keeping in storage:` +
-                `\n  Validator index: ${validator.validatorIndex}` +
-                `\n  Public key: ${validator.validatorPubkey}` +
-                `\n  Deadline slot: ${deadlineSlot}`,
-            );
-          }
-        } catch (error) {
-          // If check fails, keep validator in storage to be safe
-          this.loggerService.warn(
-            `[Blocks ${fromBlock}-${toBlock}] Failed to check isValidatorExitingKeyReported, keeping validator in storage:` +
+        if (!isStillTracked) {
+          // Not in reported set - can be removed from storage
+          totalValidatorsRemoved++;
+          this.loggerService.debug?.(
+            `[Blocks ${fromBlock}-${toBlock}] Validator removed from storage (no longer tracked):` +
               `\n  Validator index: ${validator.validatorIndex}` +
-              `\n  Error: ${this.getErrorReference(error)}`,
+              `\n  Public key: ${validator.validatorPubkey}` +
+              `\n  Deadline slot: ${deadlineSlot}`,
           );
+        } else {
+          // Still in reported set - keep in storage for next check
           remainingValidators.push(validatorData);
+          this.loggerService.debug?.(
+            `[Blocks ${fromBlock}-${toBlock}] Validator still tracked, keeping in storage:` +
+              `\n  Validator index: ${validator.validatorIndex}` +
+              `\n  Public key: ${validator.validatorPubkey}` +
+              `\n  Deadline slot: ${deadlineSlot}`,
+          );
         }
       }
 
@@ -1108,12 +1131,13 @@ export class ProverService implements OnModuleInit {
     this.updateValidatorStorageMetrics();
 
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage based on reported exit keys:` +
+      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage based on reported validators:` +
         `\n  Validators checked: ${totalValidatorsChecked}` +
         `\n  Validators removed: ${totalValidatorsRemoved}` +
         `\n  Validators remaining: ${totalValidatorsChecked - totalValidatorsRemoved}` +
         `\n  Deadline slots removed: ${totalSlotsRemoved}` +
-        `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
+        `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
+        `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}`,
     );
   }
 
