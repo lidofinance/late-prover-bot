@@ -126,6 +126,23 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const bodyBytes = await body.bytes();
+
+    // Validate that we received data
+    if (!bodyBytes || bodyBytes.length === 0) {
+      throw new Error(`Empty beacon state data received for state id [${stateId}]`);
+    }
+
+    // Log the size for debugging
+    this.logger.log(`Received beacon state data for [${stateId}]: ${bodyBytes.length} bytes, fork: ${forkName}`);
+
+    // Minimum expected size check (beacon state should be at least a few KB)
+    const MIN_STATE_SIZE = 1024; // 1KB minimum
+    if (bodyBytes.length < MIN_STATE_SIZE) {
+      throw new Error(
+        `Beacon state data too small for state id [${stateId}]: ${bodyBytes.length} bytes (expected at least ${MIN_STATE_SIZE})`,
+      );
+    }
+
     return { bodyBytes, forkName: forkName as SupportedFork };
   }
 

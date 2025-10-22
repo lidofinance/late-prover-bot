@@ -14,7 +14,6 @@ export class NodeOperatorsRegistryContract {
     const abi = [
       'function isValidatorExitDelayPenaltyApplicable(uint256,uint256,bytes,uint256) view returns (bool)',
       'function exitDeadlineThreshold(uint256) view returns (uint256)',
-      'function isValidatorExitingKeyReported(bytes _publicKey) public view returns (bool)',
     ];
 
     this.contract = new ethers.Contract(address, abi, this.execution.provider);
@@ -53,18 +52,5 @@ export class NodeOperatorsRegistryContract {
   public async exitDeadlineThreshold(nodeOperatorId: number): Promise<number> {
     const threshold = await this.contract.exitDeadlineThreshold(nodeOperatorId);
     return threshold.toNumber();
-  }
-
-  /**
-   * Check if a validator exiting key has been reported
-   * @param publicKey The validator's public key (bytes)
-   * @param overrides Optional overrides for the contract call
-   * @returns boolean indicating if the exiting key has been reported
-   */
-  public async isValidatorExitingKeyReported(
-    publicKey: string,
-    overrides: ethers.CallOverrides = {},
-  ): Promise<boolean> {
-    return await this.contract.isValidatorExitingKeyReported(publicKey, overrides);
   }
 }

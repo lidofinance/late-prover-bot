@@ -53,7 +53,6 @@ export class DaemonService implements OnModuleInit {
     const TX_GAS_FEE_HISTORY_DAYS = this.config.get('TX_GAS_FEE_HISTORY_DAYS');
     const TX_GAS_FEE_HISTORY_PERCENTILE = this.config.get('TX_GAS_FEE_HISTORY_PERCENTILE');
     const TX_GAS_LIMIT = this.config.get('TX_GAS_LIMIT');
-    const TX_SKIP_GAS_ESTIMATION = this.config.get('TX_SKIP_GAS_ESTIMATION');
     const VALIDATOR_BATCH_SIZE = this.config.get('VALIDATOR_BATCH_SIZE');
     const MAX_TRANSACTION_SIZE_BYTES = this.config.get('MAX_TRANSACTION_SIZE_BYTES');
     const TX_MINING_WAITING_TIMEOUT_MS = this.config.get('TX_MINING_WAITING_TIMEOUT_MS');
@@ -90,7 +89,6 @@ export class DaemonService implements OnModuleInit {
       TX_GAS_FEE_HISTORY_DAYS: TX_GAS_FEE_HISTORY_DAYS.toString(),
       TX_GAS_FEE_HISTORY_PERCENTILE: TX_GAS_FEE_HISTORY_PERCENTILE.toString(),
       TX_GAS_LIMIT: TX_GAS_LIMIT.toString(),
-      TX_SKIP_GAS_ESTIMATION: TX_SKIP_GAS_ESTIMATION.toString(),
       VALIDATOR_BATCH_SIZE: VALIDATOR_BATCH_SIZE.toString(),
       MAX_TRANSACTION_SIZE_BYTES: MAX_TRANSACTION_SIZE_BYTES.toString(),
       TX_MINING_WAITING_TIMEOUT_MS: TX_MINING_WAITING_TIMEOUT_MS.toString(),
