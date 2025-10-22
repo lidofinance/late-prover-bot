@@ -1164,7 +1164,6 @@ export class ProverService implements OnModuleInit {
       }
 
       const { finalizedStateView, provableFinalizedBlockHeader, ssz } = beaconState;
-
       // Process all batches and accumulate validators in storage
       await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
 
