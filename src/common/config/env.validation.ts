@@ -85,11 +85,7 @@ export class EnvironmentVariables {
 
   @IsNumber()
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public TX_GAS_LIMIT = 2_000_000; // Increased from 1M to 2M for validator proofs
-
-  @IsBoolean()
-  @Transform(({ value }) => value === 'true', { toClassOnly: true })
-  public TX_SKIP_GAS_ESTIMATION = false; // Skip gas estimation and use fixed limit
+  public TX_GAS_LIMIT = 2_000_000; // Minimum gas limit - bot will use more if estimation suggests (with 20% buffer)
 
   @IsNumber()
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })

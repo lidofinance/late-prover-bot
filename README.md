@@ -147,8 +147,7 @@ yarn run start:prod
 | `TX_GAS_PRIORITY_FEE_PERCENTILE` | Gas priority fee percentile | no | `25` |
 | `TX_GAS_FEE_HISTORY_DAYS` | Days of gas fee history | no | `1` |
 | `TX_GAS_FEE_HISTORY_PERCENTILE` | Gas fee history percentile | no | `50` |
-| `TX_GAS_LIMIT` | Gas limit for transactions | no | `2000000` |
-| `TX_SKIP_GAS_ESTIMATION` | Skip gas estimation and use fixed limit | no | `false` |
+| `TX_GAS_LIMIT` | Hard upper limit for gas (transactions will be rejected if estimated gas exceeds this) | no | `2000000` |
 | `VALIDATOR_BATCH_SIZE` | Maximum validators per transaction | no | `50` |
 | `MAX_TRANSACTION_SIZE_BYTES` | Maximum transaction size in bytes | no | `100000` |
 | `TX_MINING_WAITING_TIMEOUT_MS` | Transaction mining timeout | no | `3600000` (1 hour) |
@@ -160,6 +159,45 @@ yarn run start:prod
 | **Logging** | | | |
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | no | `info` |
 | `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
+
+## Gas Cost Estimation Tool
+
+Before running the bot, you can estimate current gas costs on mainnet using the standalone gas estimation script:
+
+```bash
+# Basic usage (uses default public RPC)
+yarn estimate-gas
+
+# With your own RPC
+EL_RPC_URLS=https://eth-mainnet.g.alchemy.com/v2/YOUR-KEY yarn estimate-gas
+
+# With custom configuration
+TX_GAS_FEE_HISTORY_DAYS=3 TX_GAS_FEE_HISTORY_PERCENTILE=75 yarn estimate-gas
+```
+
+**What it does:**
+- ✅ Fetches current mainnet base fee
+- ✅ Analyzes historical gas data (1 day by default)
+- ✅ Calculates recommended gas fee using percentile
+- ✅ Estimates costs for small/typical/large batches
+- ✅ Shows if bot would send transactions now
+- ✅ Displays costs in Gwei, ETH, and USD
+
+**Example output:**
+```
+Current base fee: 25.3 Gwei
+Recommended (50th percentile): 28.5 Gwei
+Status: ✅ ACCEPTABLE
+
+Typical Batch (~2.2M gas):
+  Gas Cost: 55,660,000 Gwei
+  ETH Cost: 0.055660 ETH
+  USD Cost: $138.35
+
+✅ DECISION: Bot would send transactions now.
+```
+
+See [scripts/README.md](scripts/README.md) for full documentation.
 
 ## Monitoring
 
@@ -173,13 +211,48 @@ curl http://localhost:8081/health
 
 ### Gas-Related Errors
 
+#### How Gas Limit Works
+
+The bot uses **dynamic gas estimation with hard limits**:
+
+1. **Estimates gas** required for each transaction using `eth_estimateGas`
+2. **Adds 20% buffer** to account for gas variation
+3. **Enforces hard limit**: `TX_GAS_LIMIT` is a **hard upper bound**
+4. **Rejects transaction** if estimated gas (with buffer) exceeds `TX_GAS_LIMIT`
+
+**Example behavior:**
+- Configured: `TX_GAS_LIMIT=2000000`
+- Estimated: `1,500,000` gas
+- Used: `1,800,000` gas (1.5M × 1.2 buffer) ✅
+- If estimated: `2,500,000` gas (with buffer: `3,000,000`)
+  - ❌ **Transaction rejected**: Exceeds hard limit of `2,000,000`
+  - Error message shows required minimum: `TX_GAS_LIMIT=3000000`
+
 #### UNPREDICTABLE_GAS_LIMIT Error
 If you encounter `UNPREDICTABLE_GAS_LIMIT` errors:
 
-1. **Increase gas limit**: Set `TX_GAS_LIMIT=2500000` (or higher)
-2. **Skip gas estimation**: Set `TX_SKIP_GAS_ESTIMATION=true` to use fixed gas limits
+1. **Check logs**: Look for the estimated gas amount before the error
+2. **Increase gas limit**: Set `TX_GAS_LIMIT` to estimated × 1.5 for safety
 3. **Check contract state**: Ensure your validators and exit requests are valid
 4. **Network issues**: Verify your RPC endpoints are stable and responsive
+
+#### Transaction Rejected: Estimated Gas Exceeds Hard Limit
+If you see "Transaction rejected: Estimated gas exceeds hard limit":
+
+1. **Check the error message**: It will show the required gas limit
+   ```
+   Estimated gas (with buffer): 2,500,000
+   Configured hard limit (TX_GAS_LIMIT): 2,000,000
+   Required: TX_GAS_LIMIT must be at least 2,500,000
+   ```
+2. **Increase TX_GAS_LIMIT**: Set it to at least the required amount
+   ```bash
+   TX_GAS_LIMIT=2500000
+   ```
+3. **Or reduce batch size**: Process fewer validators per transaction
+   ```bash
+   VALIDATOR_BATCH_SIZE=25  # Reduce from default 50
+   ```
 
 #### Intrinsic Gas Too Low Error
 If you see "intrinsic gas too low: gas X, minimum needed Y":
@@ -189,14 +262,15 @@ If you see "intrinsic gas too low: gas X, minimum needed Y":
    # If error shows "minimum needed 1588836"
    TX_GAS_LIMIT=1906600  # 1588836 * 1.2
    ```
-2. **Enable dynamic estimation**: Set `TX_SKIP_GAS_ESTIMATION=false` (default)
-3. **Check batch size**: Larger batches need more gas - consider reducing `VALIDATOR_BATCH_SIZE`
+2. **Check batch size**: Larger batches need more gas - consider reducing `VALIDATOR_BATCH_SIZE`
 
 #### Gas Limit Guidelines by Batch Size
-- **1-10 validators**: `TX_GAS_LIMIT=1000000`
-- **11-25 validators**: `TX_GAS_LIMIT=1500000` 
-- **26-50 validators**: `TX_GAS_LIMIT=2000000`
-- **51+ validators**: `TX_GAS_LIMIT=2500000+` or reduce batch size
+- **1-10 validators**: `TX_GAS_LIMIT=1500000` (with safety margin)
+- **11-25 validators**: `TX_GAS_LIMIT=2000000` (with safety margin)
+- **26-50 validators**: `TX_GAS_LIMIT=3000000` (with safety margin)
+- **51+ validators**: `TX_GAS_LIMIT=4000000+` or reduce batch size
+
+**Note:** `TX_GAS_LIMIT` is a **hard upper limit**. Transactions will be rejected if estimated gas (with 20% buffer) exceeds this value.
 
 ### Oversized Transaction Error
 

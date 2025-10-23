@@ -31,6 +31,9 @@ export class ProverService implements OnModuleInit {
     }[]
   >();
 
+  // Track validator pubkeys that have had proof transactions successfully submitted
+  private reportedValidatorPubkeys = new Set<string>();
+
   constructor(
     @Inject(LOGGER_PROVIDER) private readonly loggerService: LoggerService,
     protected readonly consensus: Consensus,
@@ -108,7 +111,17 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(`[Init ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
     // Initialize beacon state and headers
-    const { finalizedStateView } = await this.initializeBeaconState(fromBlock, toBlock);
+    const beaconState = await this.initializeBeaconState(fromBlock, toBlock);
+
+    // If beacon state deserialization failed, skip gracefully
+    if (!beaconState) {
+      this.loggerService.warn(
+        `[Init ${fromBlock}-${toBlock}] Skipping initialization due to beacon node data corruption`,
+      );
+      return;
+    }
+
+    const { finalizedStateView } = beaconState;
 
     // Process all batches and accumulate validators in storage (without processing eligible ones)
     await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
@@ -214,8 +227,28 @@ export class ProverService implements OnModuleInit {
       fork_name: deadlineState.forkName,
     });
 
-    const deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
-    stopDeserialization();
+    let deadlineStateView;
+    try {
+      deadlineStateView = ssz[deadlineState.forkName].BeaconState.deserializeToView(deadlineState.bodyBytes);
+    } catch (error) {
+      this.prometheus.stateDeserializationErrorsCount.inc({
+        fork_name: deadlineState.forkName,
+      });
+
+      this.loggerService.error(
+        `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}:` +
+          `\n  Fork: ${deadlineState.forkName}` +
+          `\n  Data size: ${deadlineState.bodyBytes.length} bytes` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {
+        validatorWitnesses: [],
+        processedValidators: 0,
+        skippedValidators: validatorGroup.length,
+      };
+    } finally {
+      stopDeserialization();
+    }
 
     if (!deadlineStateView) {
       this.prometheus.stateDeserializationErrorsCount.inc({
@@ -346,6 +379,9 @@ export class ProverService implements OnModuleInit {
         `\n  Processing time: ${Date.now() - validatorStartTime}ms`,
     );
 
+    // Check if this validator was already reported
+    const wasReported = this.reportedValidatorPubkeys.has(validator.validatorPubkey);
+
     const isPenaltyApplicable = await this.getContractForModule(
       Number(validator.moduleId),
     ).isValidatorExitDelayPenaltyApplicable(
@@ -367,13 +403,25 @@ export class ProverService implements OnModuleInit {
         reason: 'penalty_not_applicable',
       });
 
-      this.loggerService.log(
-        `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
-          `\n  Index: ${validatorIndex}` +
-          `\n  Public key: ${validator.validatorPubkey}` +
-          `\n  Validator node operator: ${validator.nodeOpId}` +
-          `\n  Validator module: ${validator.moduleId}`,
-      );
+      // If penalty is not applicable AND validator was previously reported,
+      // we can remove it from our tracking set and it will be cleaned from storage
+      if (wasReported) {
+        this.reportedValidatorPubkeys.delete(validator.validatorPubkey);
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] Validator penalty no longer applicable (was reported):` +
+            `\n  Index: ${validatorIndex}` +
+            `\n  Public key: ${validator.validatorPubkey}` +
+            `\n  Removed from tracking set - will be cleaned from storage`,
+        );
+      } else {
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] Validator skipped due to penalty:` +
+            `\n  Index: ${validatorIndex}` +
+            `\n  Public key: ${validator.validatorPubkey}` +
+            `\n  Validator node operator: ${validator.nodeOpId}` +
+            `\n  Validator module: ${validator.moduleId}`,
+        );
+      }
 
       stopValidatorTimer();
       return null;
@@ -500,6 +548,8 @@ export class ProverService implements OnModuleInit {
 
   /**
    * Initialize beacon state and headers for processing
+   * Returns null if unable to deserialize state (beacon node data corruption issue)
+   * Throws if unable to fetch state (network/API issue that should trigger alerts)
    */
   private async initializeBeaconState(
     fromBlock: number,
@@ -508,7 +558,7 @@ export class ProverService implements OnModuleInit {
     finalizedStateView: any;
     provableFinalizedBlockHeader: any;
     ssz: any;
-  }> {
+  } | null> {
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
     const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
@@ -525,7 +575,23 @@ export class ProverService implements OnModuleInit {
     };
 
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
-    const finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+
+    let finalizedStateView;
+    try {
+      finalizedStateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+    } catch (error) {
+      this.prometheus.stateDeserializationErrorsCount.inc({
+        fork_name: state.forkName,
+      });
+      this.loggerService.error(
+        `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize finalized state (beacon node data corruption):` +
+          `\n  Fork: ${state.forkName}` +
+          `\n  Data size: ${state.bodyBytes.length} bytes` +
+          `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
+          `\n  Skipping this cycle - will retry when beacon node data is healthy`,
+      );
+      return null;
+    }
 
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Using beacon state with fork ${state.forkName}`);
 
@@ -736,9 +802,25 @@ export class ProverService implements OnModuleInit {
       const summaryIndex = this.calcSummaryIndex(deadlineSlot);
       const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
-
       const summaryState = await this.consensus.getState(summarySlot);
-      const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+
+      let summaryStateView;
+      try {
+        summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+      } catch (error) {
+        this.prometheus.stateDeserializationErrorsCount.inc({
+          fork_name: summaryState.forkName,
+        });
+        this.loggerService.error(
+          `❌ Historical batch ${i + 1}/${batches.length} skipped - Failed to deserialize summary state for slot ${summarySlot}:` +
+            `\n  Fork: ${summaryState.forkName}` +
+            `\n  Data size: ${summaryState.bodyBytes.length} bytes` +
+            `\n  Error: ${error instanceof Error ? error.message : String(error)}` +
+            `\n  This is beacon node data corruption - skipping this batch`,
+        );
+        // Skip this batch but continue with others
+        continue;
+      }
 
       // Generate proof that this block's root exists in the historical summaries
       const proof = generateHistoricalStateProof(
@@ -786,10 +868,16 @@ export class ProverService implements OnModuleInit {
           [provableFinalizedBlockHeader, oldBlock, batch, exitRequest.exitRequestsData],
         );
 
+        // Transaction successful - add all validator pubkeys to reported set
+        for (const witness of batch) {
+          this.reportedValidatorPubkeys.add(witness.pubkey);
+        }
+
         this.loggerService.log(
           `✅ Historical batch ${i + 1}/${batches.length} completed:` +
             `\n  Slot: ${deadlineSlot}` +
             `\n  Validators: ${batch.length}` +
+            `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Processing time: ${Date.now() - batchStartTime}ms`,
         );
       } catch (error) {
@@ -858,9 +946,15 @@ export class ProverService implements OnModuleInit {
           [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData],
         );
 
+        // Transaction successful - add all validator pubkeys to reported set
+        for (const witness of batch) {
+          this.reportedValidatorPubkeys.add(witness.pubkey);
+        }
+
         this.loggerService.log(
           `[Blocks ${fromBlock}-${toBlock}] ✅ Batch ${i + 1}/${batches.length} completed:` +
             `\n  Validators: ${batch.length}` +
+            `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Verification time: ${Date.now() - verificationStartTime}ms` +
             `\n  Total batch time: ${Date.now() - batchStartTime}ms`,
         );
@@ -934,25 +1028,116 @@ export class ProverService implements OnModuleInit {
         `\n  Deadline slots processed: ${eligibleEntries.length}`,
     );
 
-    // Remove processed entries from storage
-    this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
+    // Remove processed entries from storage (validators no longer tracked after penalty check)
+    await this.cleanupProcessedEntries(eligibleEntries, fromBlock, toBlock);
   }
 
   /**
    * Clean up processed entries from storage
+   * Removes validators that are no longer in the reported set (penalty no longer applicable)
    */
-  private cleanupProcessedEntries(eligibleEntries: Array<[number, any[]]>, fromBlock: number, toBlock: number): void {
-    for (const [deadlineSlot] of eligibleEntries) {
-      this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+  private async cleanupProcessedEntries(
+    eligibleEntries: Array<[number, any[]]>,
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<void> {
+    let totalValidatorsChecked = 0;
+    let totalValidatorsRemoved = 0;
+    let totalSlotsRemoved = 0;
+
+    for (const [deadlineSlot, groupDataArray] of eligibleEntries) {
+      // Collect all validators for this deadline slot
+      const allValidators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[] = [];
+
+      for (const groupData of groupDataArray) {
+        allValidators.push(...groupData.validators);
+      }
+
+      // Check each validator - remove if NOT in reported set (penalty no longer applicable)
+      const remainingValidators: typeof allValidators = [];
+
+      for (const validatorData of allValidators) {
+        totalValidatorsChecked++;
+        const { validator } = validatorData;
+
+        // If validator is NOT in reported set, it means:
+        // - Either it was never reported (shouldn't be in eligible entries, but keep it)
+        // - Or it WAS reported but penalty is no longer applicable (was removed from set)
+        const isStillTracked = this.reportedValidatorPubkeys.has(validator.validatorPubkey);
+
+        if (!isStillTracked) {
+          // Not in reported set - can be removed from storage
+          totalValidatorsRemoved++;
+          this.loggerService.debug?.(
+            `[Blocks ${fromBlock}-${toBlock}] Validator removed from storage (no longer tracked):` +
+              `\n  Validator index: ${validator.validatorIndex}` +
+              `\n  Public key: ${validator.validatorPubkey}` +
+              `\n  Deadline slot: ${deadlineSlot}`,
+          );
+        } else {
+          // Still in reported set - keep in storage for next check
+          remainingValidators.push(validatorData);
+          this.loggerService.debug?.(
+            `[Blocks ${fromBlock}-${toBlock}] Validator still tracked, keeping in storage:` +
+              `\n  Validator index: ${validator.validatorIndex}` +
+              `\n  Public key: ${validator.validatorPubkey}` +
+              `\n  Deadline slot: ${deadlineSlot}`,
+          );
+        }
+      }
+
+      // Update storage: remove slot if all validators are reported, otherwise update with remaining validators
+      if (remainingValidators.length === 0) {
+        // All validators reported, remove the entire deadline slot
+        this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+        totalSlotsRemoved++;
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] All validators reported for deadline slot ${deadlineSlot}, removing slot from storage`,
+        );
+      } else {
+        // Some validators not yet reported, update storage with remaining validators
+        const updatedGroupDataArray = groupDataArray
+          .map((groupData) => {
+            const remainingForThisGroup = remainingValidators.filter((v) =>
+              groupData.validators.some((gv: any) => gv.validator.validatorIndex === v.validator.validatorIndex),
+            );
+
+            return {
+              ...groupData,
+              validators: remainingForThisGroup,
+            };
+          })
+          .filter((groupData) => groupData.validators.length > 0);
+
+        if (updatedGroupDataArray.length > 0) {
+          this.validatorsByDeadlineSlotStorage.set(deadlineSlot, updatedGroupDataArray);
+          this.loggerService.log(
+            `[Blocks ${fromBlock}-${toBlock}] Deadline slot ${deadlineSlot} updated:` +
+              `\n  Validators remaining: ${remainingValidators.length}` +
+              `\n  Validators removed: ${allValidators.length - remainingValidators.length}`,
+          );
+        } else {
+          this.validatorsByDeadlineSlotStorage.delete(deadlineSlot);
+          totalSlotsRemoved++;
+        }
+      }
     }
 
     // Update metrics after cleanup
     this.updateValidatorStorageMetrics();
 
     this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage:` +
-        `\n  Entries removed: ${eligibleEntries.length}` +
-        `\n  Remaining entries: ${this.validatorsByDeadlineSlotStorage.size}`,
+      `[Blocks ${fromBlock}-${toBlock}] Cleaned up storage based on reported validators:` +
+        `\n  Validators checked: ${totalValidatorsChecked}` +
+        `\n  Validators removed: ${totalValidatorsRemoved}` +
+        `\n  Validators remaining: ${totalValidatorsChecked - totalValidatorsRemoved}` +
+        `\n  Deadline slots removed: ${totalSlotsRemoved}` +
+        `\n  Deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}` +
+        `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}`,
     );
   }
 
@@ -966,11 +1151,19 @@ export class ProverService implements OnModuleInit {
       this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Created ${batches.length} batches for processing`);
 
       // Initialize beacon state and headers
-      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = await this.initializeBeaconState(
-        fromBlock,
-        toBlock,
-      );
+      const beaconState = await this.initializeBeaconState(fromBlock, toBlock);
 
+      // If beacon state deserialization failed (beacon node data corruption), skip this cycle gracefully
+      if (!beaconState) {
+        this.loggerService.warn(
+          `[Blocks ${fromBlock}-${toBlock}] Skipping block processing due to beacon node data corruption` +
+            `\n  Will retry in next daemon cycle` +
+            `\n  Total time: ${Date.now() - startTime}ms`,
+        );
+        return; // Return gracefully without throwing - don't trigger error_recovery alert
+      }
+
+      const { finalizedStateView, provableFinalizedBlockHeader, ssz } = beaconState;
       // Process all batches and accumulate validators in storage
       await this.processBatches(batches, finalizedStateView, fromBlock, toBlock);
 

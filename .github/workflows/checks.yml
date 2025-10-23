@@ -9,6 +9,9 @@ on:
 jobs:
   security:
     uses: lidofinance/linters/.github/workflows/security.yml@master
+    permissions:
+      contents: read
+      security-events: write
   actions:
     uses: lidofinance/linters/.github/workflows/actions.yml@master
   docker:
