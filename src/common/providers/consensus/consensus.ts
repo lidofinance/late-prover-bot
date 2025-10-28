@@ -115,7 +115,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
   public async getState(stateId: StateId, signal?: AbortSignal): Promise<State> {
     this.logger.log(`Getting state response for state id [${stateId}]`);
     let bodyBytes!: Uint8Array;
-    
+
     const { headers } = await this.retryRequest(async (baseUrl) => {
       const { body, headers } = await this.baseGet(baseUrl, this.endpoints.state(stateId), {
         signal,
@@ -130,12 +130,12 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
 
       return { body, headers };
     });
-    
+
     const forkName = this.getForkName(headers);
     if (!Object.values(SupportedFork).includes(forkName as SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
-    
+
     // Log the size for debugging
     this.logger.log(`Received beacon state data for [${stateId}]: ${bodyBytes.length} bytes, fork: ${forkName}`);
 
