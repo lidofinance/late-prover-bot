@@ -114,14 +114,10 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
 
   public async getState(stateId: StateId, signal?: AbortSignal): Promise<State> {
     const requestPromise = this.retryRequest(async (baseUrl) => {
-      const { body, headers } = await this.baseGet(
-        baseUrl,
-        this.endpoints.state(stateId),
-        {
-          signal,
-          headers: { accept: "application/octet-stream" },
-        },
-      );
+      const { body, headers } = await this.baseGet(baseUrl, this.endpoints.state(stateId), {
+        signal,
+        headers: { accept: 'application/octet-stream' },
+      });
 
       const bytes = await body.bytes();
       if (bytes.length === 0) {
