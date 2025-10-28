@@ -113,27 +113,29 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
   }
 
   public async getState(stateId: StateId, signal?: AbortSignal): Promise<State> {
-    const requestPromise = this.retryRequest(async (baseUrl) => {
+    this.logger.log(`Getting state response for state id [${stateId}]`);
+    let bodyBytes!: Uint8Array;
+
+    const { headers } = await this.retryRequest(async (baseUrl) => {
       const { body, headers } = await this.baseGet(baseUrl, this.endpoints.state(stateId), {
         signal,
         headers: { accept: 'application/octet-stream' },
       });
 
-      const bytes = await body.bytes();
-      if (bytes.length === 0) {
+      bodyBytes = await body.bytes();
+      if (bodyBytes.length === 0) {
         // throwing here causes retryRequest to try the next baseUrl
         throw new Error(`Empty beacon state data received for state id [${stateId}]`);
       }
 
       return { body, headers };
     });
-    this.logger.log(`Getting state response for state id [${stateId}]`);
-    const { body, headers } = await requestPromise;
+
     const forkName = this.getForkName(headers);
     if (!Object.values(SupportedFork).includes(forkName as SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
-    const bodyBytes = await body.bytes();
+
     // Log the size for debugging
     this.logger.log(`Received beacon state data for [${stateId}]: ${bodyBytes.length} bytes, fork: ${forkName}`);
 
