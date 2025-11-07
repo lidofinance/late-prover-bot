@@ -113,35 +113,31 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
   }
 
   public async getState(stateId: StateId, signal?: AbortSignal): Promise<State> {
-    const requestPromise = this.retryRequest(async (baseUrl) =>
-      this.baseGet(baseUrl, this.endpoints.state(stateId), {
+    this.logger.log(`Getting state response for state id [${stateId}]`);
+    let bodyBytes!: Uint8Array;
+
+    const { headers } = await this.retryRequest(async (baseUrl) => {
+      const { body, headers } = await this.baseGet(baseUrl, this.endpoints.state(stateId), {
         signal,
         headers: { accept: 'application/octet-stream' },
-      }),
-    );
-    this.logger.log(`Getting state response for state id [${stateId}]`);
-    const { body, headers } = await requestPromise;
+      });
+
+      bodyBytes = await body.bytes();
+      if (bodyBytes.length === 0) {
+        // throwing here causes retryRequest to try the next baseUrl
+        throw new Error(`Empty beacon state data received for state id [${stateId}]`);
+      }
+
+      return { body, headers };
+    });
+
     const forkName = this.getForkName(headers);
     if (!Object.values(SupportedFork).includes(forkName as SupportedFork)) {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
-    const bodyBytes = await body.bytes();
-
-    // Validate that we received data
-    if (!bodyBytes || bodyBytes.length === 0) {
-      throw new Error(`Empty beacon state data received for state id [${stateId}]`);
-    }
 
     // Log the size for debugging
     this.logger.log(`Received beacon state data for [${stateId}]: ${bodyBytes.length} bytes, fork: ${forkName}`);
-
-    // Minimum expected size check (beacon state should be at least a few KB)
-    const MIN_STATE_SIZE = 1024; // 1KB minimum
-    if (bodyBytes.length < MIN_STATE_SIZE) {
-      throw new Error(
-        `Beacon state data too small for state id [${stateId}]: ${bodyBytes.length} bytes (expected at least ${MIN_STATE_SIZE})`,
-      );
-    }
 
     return { bodyBytes, forkName: forkName as SupportedFork };
   }
