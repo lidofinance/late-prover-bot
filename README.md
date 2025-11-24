@@ -66,8 +66,6 @@ When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
 - ✅ **Repeating window**: Bot continuously processes from the last saved state to current
 - ✅ **Full visibility**: You can observe what the bot would do in real-time
 
-</details>
-
 ## Getting Started
 
 ### Prerequisites
