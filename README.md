@@ -56,6 +56,53 @@ The bot runs as a daemon that continuously processes beacon chain roots:
 
 </details>
 
+### Dry Run Mode
+
+When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
+
+**Behavior:**
+- ✅ **No transactions sent**: All transaction preparations are logged but not submitted to blockchain
+- ✅ **No state persistence**: The `last-processed-root.json` is not updated
+- ✅ **Repeating window**: Bot continuously processes from the last saved state to current
+- ✅ **Full visibility**: You can observe what the bot would do in real-time
+
+**Use Case - Temporary Dry Run Period:**
+
+If you have a running bot and want to enable dry run for testing (e.g., 5 days):
+
+1. **Enable dry run mode:**
+   ```bash
+   # Update environment variable
+   export DRY_RUN=true
+   # Restart the bot
+   ```
+
+2. **During dry run period (Days 1-5):**
+   - Bot will repeatedly process events from last saved state → current
+   - No transactions are sent
+   - State file (`storage/last-processed-root.json`) remains frozen at pre-dry-run position
+   - You can monitor logs to see what events would be processed
+
+3. **Re-enable normal mode:**
+   ```bash
+   # Disable dry run
+   export DRY_RUN=false
+   # Restart the bot
+   ```
+
+4. **After re-enabling:**
+   - Bot resumes from the last saved state (before dry run started)
+   - Processes all events that occurred during the dry run period
+   - Sends historical proofs for any delayed validators from that period
+   - State advances normally from this point
+
+**Why this works:**
+- State freezing ensures no events are skipped when switching back to normal mode
+- The bot's historical proof mechanism handles events that are now in the past
+- You get to test/monitor without risking missed validations
+
+</details>
+
 ## Getting Started
 
 ### Prerequisites
@@ -125,7 +172,7 @@ yarn run start:prod
 | **Core Settings** | | | |
 | `WORKING_MODE` | Working mode: `daemon` | no | `daemon` |
 | `HTTP_PORT` | Port for HTTP server (health/metrics) | no | `8080` |
-| `DRY_RUN` | Dry run mode (no transactions) | no | `false` |
+| `DRY_RUN` | Dry run mode (no transactions, no state updates) | no | `false` |
 | `DAEMON_SLEEP_INTERVAL_MS` | Sleep interval between daemon cycles (milliseconds) | no | `300000` (5 minutes) |
 | `CHAIN_ID` | Ethereum chain ID (1=mainnet, 5=goerli, 17000=holesky) | yes | |
 | **Blockchain Connection** | | | |
