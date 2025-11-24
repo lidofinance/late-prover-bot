@@ -66,41 +66,6 @@ When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
 - ✅ **Repeating window**: Bot continuously processes from the last saved state to current
 - ✅ **Full visibility**: You can observe what the bot would do in real-time
 
-**Use Case - Temporary Dry Run Period:**
-
-If you have a running bot and want to enable dry run for testing (e.g., 5 days):
-
-1. **Enable dry run mode:**
-   ```bash
-   # Update environment variable
-   export DRY_RUN=true
-   # Restart the bot
-   ```
-
-2. **During dry run period (Days 1-5):**
-   - Bot will repeatedly process events from last saved state → current
-   - No transactions are sent
-   - State file (`storage/last-processed-root.json`) remains frozen at pre-dry-run position
-   - You can monitor logs to see what events would be processed
-
-3. **Re-enable normal mode:**
-   ```bash
-   # Disable dry run
-   export DRY_RUN=false
-   # Restart the bot
-   ```
-
-4. **After re-enabling:**
-   - Bot resumes from the last saved state (before dry run started)
-   - Processes all events that occurred during the dry run period
-   - Sends historical proofs for any delayed validators from that period
-   - State advances normally from this point
-
-**Why this works:**
-- State freezing ensures no events are skipped when switching back to normal mode
-- The bot's historical proof mechanism handles events that are now in the past
-- You get to test/monitor without risking missed validations
-
 </details>
 
 ## Getting Started

@@ -113,7 +113,7 @@ export class RootsProcessor {
   private async handleProcessingResult(processedRoot: ProcessedRoot): Promise<void> {
     try {
       const isDryRun = this.config.get('DRY_RUN');
-      
+
       if (isDryRun) {
         this.logger.log(
           `🔍 DRY RUN MODE: Skipping state save for root [${processedRoot.root}] at slot [${processedRoot.slot}]`,
