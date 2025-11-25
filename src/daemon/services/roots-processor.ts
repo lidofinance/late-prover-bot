@@ -4,6 +4,7 @@ import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { hexlify } from 'ethers/lib/utils';
 
 import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
+import { ConfigService } from '../../common/config/config.service';
 import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
 import { getSizeRangeCategory } from '../../common/prometheus/decorators';
@@ -15,6 +16,7 @@ import { BlockHeaderResponse } from '../../common/providers/consensus/response.i
 export class RootsProcessor {
   constructor(
     @Inject(LOGGER_PROVIDER) protected readonly logger: LoggerService,
+    protected readonly config: ConfigService,
     protected readonly prometheus: PrometheusService,
     protected readonly consensus: Consensus,
     protected readonly lastProcessedRoot: LastProcessedRoot,
@@ -109,13 +111,7 @@ export class RootsProcessor {
    * Handle the result of block processing
    */
   private async handleProcessingResult(processedRoot: ProcessedRoot): Promise<void> {
-    try {
-      await this.lastProcessedRoot.set(processedRoot);
-
-      this.logger.log(`✅ Successfully processed root [${processedRoot.root}] at slot [${processedRoot.slot}]`);
-    } catch (error) {
-      this.logger.error(`Failed to handle processing result for root [${processedRoot.root}]`, error);
-      throw error;
-    }
+    await this.lastProcessedRoot.set(processedRoot);
+    this.logger.log(`✅ Successfully processed root [${processedRoot.root}] at slot [${processedRoot.slot}]`);
   }
 }
