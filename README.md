@@ -62,8 +62,6 @@ When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
 
 **Behavior:**
 - ✅ **No transactions sent**: All transaction preparations are logged but not submitted to blockchain
-- ✅ **No state persistence**: The last processed root is not saved to disk
-- ✅ **Repeating window**: Bot continuously processes from the last in-memory state to current
 - ✅ **Full visibility**: You can observe what the bot would do in real-time
 
 ## Getting Started
@@ -135,7 +133,7 @@ yarn run start:prod
 | **Core Settings** | | | |
 | `WORKING_MODE` | Working mode: `daemon` | no | `daemon` |
 | `HTTP_PORT` | Port for HTTP server (health/metrics) | no | `8080` |
-| `DRY_RUN` | Dry run mode (no transactions, no state updates) | no | `false` |
+| `DRY_RUN` | Dry run mode (no transactions) | no | `false` |
 | `DAEMON_SLEEP_INTERVAL_MS` | Sleep interval between daemon cycles (milliseconds) | no | `300000` (5 minutes) |
 | `CHAIN_ID` | Ethereum chain ID (1=mainnet, 5=goerli, 17000=holesky) | yes | |
 | **Blockchain Connection** | | | |
