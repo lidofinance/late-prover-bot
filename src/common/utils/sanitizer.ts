@@ -118,4 +118,3 @@ function sanitizeCommonPatterns(str: string): string {
 
   return sanitized;
 }
-
