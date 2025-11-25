@@ -17,7 +17,6 @@ COPY --from=building /app/dist ./dist
 COPY --from=building /app/node_modules ./node_modules
 COPY ./package.json ./
 COPY ./build-info.json ./
-RUN mkdir -p ./storage/ && chown -R node:node ./storage/
 
 USER node
 

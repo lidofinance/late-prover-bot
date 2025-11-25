@@ -56,16 +56,13 @@ services:
       - CL_API_URLS=${CL_API_URLS}
       - LIDO_LOCATOR_ADDRESS=${LIDO_LOCATOR_ADDRESS}
       - TX_SIGNER_PRIVATE_KEY=${TX_SIGNER_PRIVATE_KEY:-}
-      - START_ROOT=${START_ROOT:-}
+      - START_LOOKBACK_DAYS=${START_LOOKBACK_DAYS:-7}
     expose:
       - "${HTTP_PORT:-8093}"
     ports:
       - "${HTTP_PORT:-8093}:${HTTP_PORT:-8093}"
-    volumes:
-      - daemon:/app/storage/
 
 
 volumes:
-  daemon:
   #grafana:
   prometheus:

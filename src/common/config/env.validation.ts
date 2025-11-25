@@ -7,7 +7,6 @@ import {
   IsInt,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
   Max,
   Min,
@@ -38,19 +37,10 @@ export class EnvironmentVariables {
   @IsEnum(WorkingMode)
   public WORKING_MODE = WorkingMode.Daemon;
 
-  @IsOptional()
-  @IsString()
-  public START_ROOT?: string;
-
-  @IsOptional()
   @IsNumber()
+  @Min(1)
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public START_SLOT?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public START_EPOCH?: number;
+  public START_LOOKBACK_DAYS = 7; // Default to 7 days lookback
 
   @IsNotEmpty()
   @IsString()

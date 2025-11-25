@@ -21,28 +21,23 @@ export class RootsProvider {
   /**
    * Get both PREV and LATEST roots.
    * PREV is initialized from:
-   * 1. Last processed root from file
-   * 2. Fallback to START_ROOT from env (state root hash)
-   * 3. Fallback to START_SLOT from env (beacon slot number)
-   * 4. Fallback to START_EPOCH from env (beacon epoch number)
-   * 5. Fallback to parent of finalized root
+   * 1. Last processed root from memory
+   * 2. Fallback to START_LOOKBACK_DAYS ago (configurable, default 7 days)
    *
    * LATEST is always the finalized root.
    *
    * Returns undefined if failed to get finalized header.
    */
   public async getRoots(): Promise<{ prev: BlockHeaderResponse; latest: BlockHeaderResponse } | undefined> {
-    // Get finalized header first as we need it for both PREV and LATEST
-    const finalized = await this.consensus.getBeaconHeader('finalized');
-    if (!finalized) {
-      this.logger.warn('Failed to get finalized header');
+    const prev = await this.getPrevRoot();
+    if (!prev) {
+      this.logger.warn('Failed to get previous root');
       return undefined;
     }
 
-    // Get PREV root
-    const prev = await this.getPrevRoot(finalized);
-    if (!prev) {
-      this.logger.warn('Failed to get previous root');
+    const finalized = await this.consensus.getBeaconHeader('finalized');
+    if (!finalized) {
+      this.logger.warn('Failed to get finalized header');
       return undefined;
     }
 
@@ -63,8 +58,8 @@ export class RootsProvider {
     };
   }
 
-  private async getPrevRoot(finalized: BlockHeaderResponse): Promise<BlockHeaderResponse | undefined> {
-    // 1. Try to get last processed root from file
+  private async getPrevRoot(): Promise<BlockHeaderResponse | undefined> {
+    // 1. Try to get last processed root from memory
     const lastProcessed = await this.lastProcessedRoot.get();
     if (lastProcessed) {
       const header = await this.consensus.getBeaconHeader(lastProcessed.root);
@@ -74,56 +69,26 @@ export class RootsProvider {
       }
     }
 
-    // 2. Try to get START_ROOT from env (state root hash)
-    const startRoot = this.config.get('START_ROOT');
-    if (startRoot) {
-      const header = await this.consensus.getBeaconHeader(startRoot);
+    // 2. Fallback to header from START_LOOKBACK_DAYS ago
+    const lookbackDays = this.config.get('START_LOOKBACK_DAYS');
+    const lookbackTimestamp = Math.floor(Date.now() / 1000) - lookbackDays * 24 * 60 * 60;
+    const lookbackSlot = this.consensus.timestampToSlot(lookbackTimestamp);
+
+    try {
+      const header = await this.consensus.getBeaconHeader(lookbackSlot.toString());
       if (header) {
-        this.logger.log(`Using START_ROOT [${startRoot}]`);
+        this.logger.log(
+          `Using lookback slot from ${lookbackDays} days ago:` +
+            `\n  Slot: ${lookbackSlot}` +
+            `\n  Root: [${header.root}]`,
+        );
         return header;
       }
+    } catch (error) {
+      this.logger.warn(`Failed to get header for lookback slot [${lookbackSlot}]: ${error.message}`);
     }
 
-    // 3. Try to get START_SLOT from env (beacon slot number)
-    const startSlot = this.config.get('START_SLOT');
-    if (startSlot !== undefined) {
-      try {
-        const header = await this.consensus.getBeaconHeader(startSlot.toString());
-        if (header) {
-          this.logger.log(`Using START_SLOT [${startSlot}] -> root [${header.root}]`);
-          return header;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to get header for START_SLOT [${startSlot}]: ${error.message}`);
-      }
-    }
-
-    // 4. Try to get START_EPOCH from env (beacon epoch number)
-    const startEpoch = this.config.get('START_EPOCH');
-    if (startEpoch !== undefined) {
-      try {
-        const slot = startEpoch * Number(this.consensus.beaconConfig?.SLOTS_PER_EPOCH || 32);
-        const header = await this.consensus.getBeaconHeader(slot.toString());
-        if (header) {
-          this.logger.log(`Using START_EPOCH [${startEpoch}] -> slot [${slot}] -> root [${header.root}]`);
-          return header;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to get header for START_EPOCH [${startEpoch}]: ${error.message}`);
-      }
-    }
-
-    // 5. Fallback to parent of finalized root
-    const parentRoot = finalized.header.message.parent_root;
-    if (parentRoot) {
-      const header = await this.consensus.getBeaconHeader(parentRoot);
-      if (header) {
-        this.logger.log(`Using parent of finalized root [${parentRoot}]`);
-        return header;
-      }
-    }
-
-    this.logger.warn('Failed to get parent of finalized root');
+    this.logger.warn('Failed to get previous root');
     return undefined;
   }
 }

@@ -111,20 +111,7 @@ export class RootsProcessor {
    * Handle the result of block processing
    */
   private async handleProcessingResult(processedRoot: ProcessedRoot): Promise<void> {
-    try {
-      const isDryRun = this.config.get('DRY_RUN');
-
-      if (isDryRun) {
-        this.logger.log(
-          `🔍 DRY RUN MODE: Skipping state save for root [${processedRoot.root}] at slot [${processedRoot.slot}]`,
-        );
-      } else {
-        await this.lastProcessedRoot.set(processedRoot);
-        this.logger.log(`✅ Successfully processed root [${processedRoot.root}] at slot [${processedRoot.slot}]`);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to handle processing result for root [${processedRoot.root}]`, error);
-      throw error;
-    }
+    await this.lastProcessedRoot.set(processedRoot);
+    this.logger.log(`✅ Successfully processed root [${processedRoot.root}] at slot [${processedRoot.slot}]`);
   }
 }
