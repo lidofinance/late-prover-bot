@@ -17,7 +17,6 @@ import { LogFormat } from '../config/interfaces';
         const isJSON = format === LogFormat.JSON;
 
         const transports = isJSON ? jsonTransport({ secrets }) : simpleTransport({ secrets });
-
         return { level, transports };
       },
     }),

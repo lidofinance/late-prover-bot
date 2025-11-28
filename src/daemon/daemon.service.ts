@@ -206,25 +206,23 @@ export class DaemonService implements OnModuleInit {
   }
 
   private serializeError(err: unknown): string {
+    let errorObj: any;
     if (err instanceof Error) {
-      return JSON.stringify(
-        {
-          name: err.name,
-          message: err.message,
-          stack: err.stack,
-          ...Object.getOwnPropertyNames(err).reduce(
-            (acc, key) => {
-              acc[key] = (err as any)[key];
-              return acc;
-            },
-            {} as Record<string, any>,
-          ),
-        },
-        null,
-        2,
-      );
+      errorObj = {
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+        ...Object.getOwnPropertyNames(err).reduce(
+          (acc, key) => {
+            acc[key] = (err as any)[key];
+            return acc;
+          },
+          {} as Record<string, any>,
+        ),
+      };
     } else {
-      return JSON.stringify(err, null, 2);
+      errorObj = err;
     }
+    return JSON.stringify(errorObj, null, 2);
   }
 }
