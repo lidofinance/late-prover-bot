@@ -1,4 +1,4 @@
-import { regExpEscape, SECRET_REPLACER } from '@lido-nestjs/logger';
+import { SECRET_REPLACER, regExpEscape } from '@lido-nestjs/logger';
 import { Transform, plainToInstance } from 'class-transformer';
 import {
   ArrayMinSize,
