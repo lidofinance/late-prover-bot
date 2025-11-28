@@ -1,3 +1,4 @@
+import { regExpEscape, SECRET_REPLACER } from '@lido-nestjs/logger';
 import { Transform, plainToInstance } from 'class-transformer';
 import {
   ArrayMinSize,
@@ -167,7 +168,6 @@ export function validate(config: Record<string, unknown>) {
   const errors = validateSync(validatedConfig, validatorOptions);
 
   if (errors.length > 0) {
-    // Sanitize error messages before logging to prevent leaking sensitive data
     const errorString = errors.toString();
     const sanitizedError = sanitizeValidationErrors(errorString, config);
     console.error('Configuration validation failed:');
@@ -180,39 +180,24 @@ export function validate(config: Record<string, unknown>) {
 
 /**
  * Sanitize validation error messages to prevent leaking sensitive data
+ * Uses the same sanitization logic as @lido-nestjs/logger cleanSecrets format
  */
 function sanitizeValidationErrors(errorString: string, config: Record<string, unknown>): string {
-  let sanitized = errorString;
-
-  // Get potentially sensitive values from config
   const sensitiveKeys = ['TX_SIGNER_PRIVATE_KEY', 'EL_RPC_URLS', 'CL_API_URLS'];
 
+  const secrets: string[] = [];
   for (const key of sensitiveKeys) {
     const value = config[key];
     if (value) {
       const values = Array.isArray(value) ? value : [value];
-      for (const val of values) {
-        if (val && typeof val === 'string' && val.length > 0) {
-          // Replace the actual value with a redacted version
-          const escaped = val.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const regex = new RegExp(escaped, 'g');
-          sanitized = sanitized.replace(regex, '***REDACTED***');
-        }
-      }
+      secrets.push(...values.filter((v): v is string => typeof v === 'string' && v.length > 0));
     }
   }
 
-  // Sanitize common patterns
-  // Private keys (0x followed by 64 hex characters)
-  sanitized = sanitized.replace(/0x[0-9a-fA-F]{64}/g, '0x****...***REDACTED***');
-
-  // URLs with credentials
-  sanitized = sanitized.replace(/(https?:\/\/)([^:]+):([^@]+)@/gi, '$1***REDACTED***:***REDACTED***@');
-
-  // API keys in query strings
-  sanitized = sanitized.replace(/([?&])(apikey|api_key|token|key|auth)=([^&\s]+)/gi, '$1$2=***REDACTED***');
-
-  return sanitized;
+  return secrets.reduce((sanitized, secret) => {
+    const re = new RegExp(regExpEscape(secret), 'g');
+    return sanitized.replace(re, SECRET_REPLACER);
+  }, errorString);
 }
 
 const toBoolean = (value: any): boolean => {

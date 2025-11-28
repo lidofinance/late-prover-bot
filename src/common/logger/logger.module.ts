@@ -1,8 +1,7 @@
-import { LoggerModule as Logger } from '@lido-nestjs/logger';
+import { LoggerModule as Logger, cleanSecrets } from '@lido-nestjs/logger';
 import { Module } from '@nestjs/common';
 import * as winston from 'winston';
 
-import { sanitizerFormat } from './sanitizer.format';
 import { ConfigModule } from '../config/config.module';
 import { ConfigService } from '../config/config.service';
 import { LogFormat } from '../config/interfaces';
@@ -18,17 +17,16 @@ import { LogFormat } from '../config/interfaces';
         const format = configService.get('LOG_FORMAT');
         const isJSON = format === LogFormat.JSON;
 
-        // Create custom transport with our advanced sanitization
         const transport = new winston.transports.Console({
           format: isJSON
             ? winston.format.combine(
-                sanitizerFormat(secrets), // Our advanced sanitizer
+                cleanSecrets({ secrets }),
                 winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
                 winston.format.json(),
               )
             : winston.format.combine(
                 winston.format.colorize({ all: true }),
-                sanitizerFormat(secrets), // Our advanced sanitizer
+                cleanSecrets({ secrets }),
                 winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
                 winston.format.printf(({ timestamp, level, message, context, stack, ...meta }) => {
                   const contextStr = context ? ` [${context}]` : '';

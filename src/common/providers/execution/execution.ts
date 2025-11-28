@@ -9,7 +9,6 @@ import { promise as spinnerFor } from 'ora-classic';
 import { bigIntMax, bigIntMin, percentile } from './utils/common';
 import { ConfigService } from '../../config/config.service';
 import { PrometheusService } from '../../prometheus/prometheus.service';
-import { sanitizeObject } from '../../utils/sanitizer';
 
 export enum TransactionStatus {
   confirmed = 'confirmed',
@@ -66,10 +65,7 @@ interface TransactionContext {
 class ErrorLogger {
   private loggedErrors = new Set<string>();
 
-  constructor(
-    private logger: LoggerService,
-    private secrets: string[],
-  ) {}
+  constructor(private logger: LoggerService) {}
 
   logErrorOnce(error: any, context?: string): string {
     let errorId: string;
@@ -151,10 +147,7 @@ class ErrorLogger {
     } else {
       errorObj = err;
     }
-
-    // Sanitize the error object before serialization
-    const sanitized = sanitizeObject(errorObj, this.secrets);
-    return JSON.stringify(sanitized, null, 2);
+    return JSON.stringify(errorObj, null, 2);
   }
 }
 
@@ -174,7 +167,7 @@ export class Execution {
     public readonly provider: SimpleFallbackJsonRpcBatchProvider,
   ) {
     this.initializeSigner();
-    this.errorLogger = new ErrorLogger(this.logger, this.config.secrets);
+    this.errorLogger = new ErrorLogger(this.logger);
   }
 
   // ==========================================

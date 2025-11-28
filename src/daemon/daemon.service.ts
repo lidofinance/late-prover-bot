@@ -12,7 +12,6 @@ import sleep from './utils/sleep';
 import { ConfigService } from '../common/config/config.service';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
-import { sanitizeObject } from '../common/utils/sanitizer';
 
 @Injectable()
 export class DaemonService implements OnModuleInit {
@@ -207,8 +206,6 @@ export class DaemonService implements OnModuleInit {
   }
 
   private serializeError(err: unknown): string {
-    const secrets = this.config.secrets;
-
     let errorObj: any;
     if (err instanceof Error) {
       errorObj = {
@@ -226,9 +223,6 @@ export class DaemonService implements OnModuleInit {
     } else {
       errorObj = err;
     }
-
-    // Sanitize the error object before serialization
-    const sanitized = sanitizeObject(errorObj, secrets);
-    return JSON.stringify(sanitized, null, 2);
+    return JSON.stringify(errorObj, null, 2);
   }
 }
