@@ -476,8 +476,8 @@ export class ProverService implements OnModuleInit {
 
     if (storageSize > 0) {
       const slots = Array.from(this.validatorsByDeadlineSlotStorage.keys());
-      const minSlot = Math.min(...slots);
-      const maxSlot = Math.max(...slots);
+      const minSlot = slots.reduce((min, slot) => (slot < min ? slot : min), slots[0]);
+      const maxSlot = slots.reduce((max, slot) => (slot > max ? slot : max), slots[0]);
       this.prometheus.validatorStorageMinSlot.set(minSlot);
       this.prometheus.validatorStorageMaxSlot.set(maxSlot);
     } else {
@@ -707,7 +707,7 @@ export class ProverService implements OnModuleInit {
     toBlock: number,
   ): Promise<{ processedValidators: number; skippedValidators: number }> {
     // Combine all validators for this deadline slot from all exit requests
-    const allValidators: {
+    let allValidators: {
       validator: ReturnType<typeof this.decodeValidatorsData>[0];
       activationEpoch: number;
       exitDeadlineEpoch: number;
@@ -715,7 +715,7 @@ export class ProverService implements OnModuleInit {
     let exitRequest: any = null;
 
     for (const groupData of groupDataArray) {
-      allValidators.push(...groupData.validators);
+      allValidators = allValidators.concat(groupData.validators);
       if (!exitRequest) {
         exitRequest = groupData.exitRequest; // Use the first exit request for the group
       }
@@ -1047,14 +1047,15 @@ export class ProverService implements OnModuleInit {
 
     for (const [deadlineSlot, groupDataArray] of eligibleEntries) {
       // Collect all validators for this deadline slot
-      const allValidators: {
+      let allValidators: {
         validator: ReturnType<typeof this.decodeValidatorsData>[0];
         activationEpoch: number;
         exitDeadlineEpoch: number;
       }[] = [];
 
       for (const groupData of groupDataArray) {
-        allValidators.push(...groupData.validators);
+        // Use concat instead of spread to avoid stack overflow with large arrays
+        allValidators = allValidators.concat(groupData.validators);
       }
 
       // Check each validator - remove if NOT in reported set (penalty no longer applicable)

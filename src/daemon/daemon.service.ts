@@ -10,6 +10,7 @@ import { RootsProcessor } from './services/roots-processor';
 import { RootsProvider } from './services/roots-provider';
 import sleep from './utils/sleep';
 import { ConfigService } from '../common/config/config.service';
+import { serializeError } from '../common/logger/safe-error-format';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
 
@@ -122,7 +123,7 @@ export class DaemonService implements OnModuleInit {
       try {
         await this.baseRun();
       } catch (error) {
-        this.logger.error('Error in daemon loop', this.serializeError(error));
+        this.logger.error('Error in daemon loop', serializeError(error));
 
         // Track daemon sleep due to error
         this.prometheus.daemonSleepCount.inc({
@@ -198,31 +199,10 @@ export class DaemonService implements OnModuleInit {
           `\n  Processing time: ${Date.now() - baseRunStartTime}ms`,
       );
     } catch (error) {
-      this.logger.error('Failed to process roots', this.serializeError(error));
+      this.logger.error('Failed to process roots', serializeError(error));
       throw error;
     } finally {
       stopRootsProcessorTimer();
     }
-  }
-
-  private serializeError(err: unknown): string {
-    let errorObj: any;
-    if (err instanceof Error) {
-      errorObj = {
-        name: err.name,
-        message: err.message,
-        stack: err.stack,
-        ...Object.getOwnPropertyNames(err).reduce(
-          (acc, key) => {
-            acc[key] = (err as any)[key];
-            return acc;
-          },
-          {} as Record<string, any>,
-        ),
-      };
-    } else {
-      errorObj = err;
-    }
-    return JSON.stringify(errorObj, null, 2);
   }
 }
