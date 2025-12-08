@@ -476,8 +476,8 @@ export class ProverService implements OnModuleInit {
 
     if (storageSize > 0) {
       const slots = Array.from(this.validatorsByDeadlineSlotStorage.keys());
-      const minSlot = Math.min(...slots);
-      const maxSlot = Math.max(...slots);
+      const minSlot = slots.reduce((min, slot) => (slot < min ? slot : min), slots[0]);
+      const maxSlot = slots.reduce((max, slot) => (slot > max ? slot : max), slots[0]);
       this.prometheus.validatorStorageMinSlot.set(minSlot);
       this.prometheus.validatorStorageMaxSlot.set(maxSlot);
     } else {
