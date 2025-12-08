@@ -101,7 +101,10 @@ export class RootsProcessor {
           `\n  Avg per block: ${(processingDuration / blockRange).toFixed(2)}ms`,
       );
     } catch (error) {
-      this.logger.error(`Failed to process block range ${prevBlockNumber}-${finalizedBlockNumber}`, serializeError(error));
+      this.logger.error(
+        `Failed to process block range ${prevBlockNumber}-${finalizedBlockNumber}`,
+        serializeError(error),
+      );
       throw error;
     } finally {
       stopBlockRangeTimer();
