@@ -725,9 +725,9 @@ export class ProverService implements OnModuleInit {
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     const isOldSlot = await this.isSlotOld(deadlineSlot);
-    
+
     const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-    
+
     // Use the actual slot that has a block for proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
     const provableDeadlineBlockHeader = {
@@ -1339,7 +1339,7 @@ export class ProverService implements OnModuleInit {
   /**
    * Find the next available (non-skipped) slot at or after the given slot
    * Beacon chain can have skipped slots where no block was proposed
-   * 
+   *
    * @param startSlot The slot to start searching from
    * @param maxAttempts Maximum number of slots to try (default: 32, one epoch)
    * @returns The next available slot number and its header
@@ -1356,7 +1356,8 @@ export class ProverService implements OnModuleInit {
         const header = await this.consensus.getBeaconHeader(currentSlot.toString());
         // Successfully got header - this slot has a block
         this.loggerService.log(
-          `Found available slot ${currentSlot}` + (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
+          `Found available slot ${currentSlot}` +
+            (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
         );
         return { slot: currentSlot, header };
       } catch (error) {
