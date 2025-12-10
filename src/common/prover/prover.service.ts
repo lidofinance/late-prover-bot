@@ -725,8 +725,11 @@ export class ProverService implements OnModuleInit {
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     const isOldSlot = await this.isSlotOld(deadlineSlot);
-    const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
-    const proofSlotTimestamp = this.consensus.slotToTimestamp(deadlineSlot);
+    
+    const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
+    
+    // Use the actual slot that has a block for proof timestamp
+    const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
     const provableDeadlineBlockHeader = {
       header: {
         slot: Number(deadlineBlockHeader.header.message.slot),
@@ -735,13 +738,13 @@ export class ProverService implements OnModuleInit {
         stateRoot: deadlineBlockHeader.header.message.state_root,
         bodyRoot: deadlineBlockHeader.header.message.body_root,
       },
-      rootsTimestamp: this.calcRootsTimestamp(deadlineSlot),
+      rootsTimestamp: this.calcRootsTimestamp(actualSlot),
     };
 
     // Process all combined validators for this deadline slot
     const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
       allValidators,
-      deadlineSlot,
+      actualSlot,
       proofSlotTimestamp,
       deliveredTimestamp,
       fromBlock,
@@ -830,7 +833,7 @@ export class ProverService implements OnModuleInit {
         rootIndexInSummary,
       );
 
-      const deadlineBlockHeader = await this.consensus.getBeaconHeader(deadlineSlot.toString());
+      const { header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
 
       const oldBlock = {
         header: {
@@ -1330,6 +1333,43 @@ export class ProverService implements OnModuleInit {
       this.consensus.genesisTimestamp +
       Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
       slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)
+    );
+  }
+
+  /**
+   * Find the next available (non-skipped) slot at or after the given slot
+   * Beacon chain can have skipped slots where no block was proposed
+   * 
+   * @param startSlot The slot to start searching from
+   * @param maxAttempts Maximum number of slots to try (default: 32, one epoch)
+   * @returns The next available slot number and its header
+   */
+  private async findNextAvailableSlot(
+    startSlot: number,
+    maxAttempts: number = 32,
+  ): Promise<{ slot: number; header: any }> {
+    let currentSlot = startSlot;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const header = await this.consensus.getBeaconHeader(currentSlot.toString());
+        // Successfully got header - this slot has a block
+        this.loggerService.log(
+          `Found available slot ${currentSlot}` + (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
+        );
+        return { slot: currentSlot, header };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        this.loggerService.debug?.(
+          `Slot ${currentSlot} appears to be skipped, trying next slot: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        currentSlot++;
+      }
+    }
+
+    throw new Error(
+      `Failed to find available slot after ${maxAttempts} attempts starting from slot ${startSlot}. Last error: ${lastError?.message}`,
     );
   }
 
