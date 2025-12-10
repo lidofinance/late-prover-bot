@@ -10,6 +10,7 @@ import { VerifierContract } from '../contracts/validator-exit-delay-verifier.ser
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
+import { RequestError } from '../providers/base/rest-provider';
 import { Consensus } from '../providers/consensus/consensus';
 import { Execution } from '../providers/execution/execution';
 
@@ -1362,9 +1363,13 @@ export class ProverService implements OnModuleInit {
         return { slot: currentSlot, header };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        this.loggerService.debug?.(
-          `Slot ${currentSlot} appears to be skipped, trying next slot: ${error instanceof Error ? error.message : String(error)}`,
-        );
+
+        // Only retry for 404 errors (skipped slots), throw all other errors
+        if (!(error instanceof RequestError && error.statusCode === 404)) {
+          throw error;
+        }
+
+        this.loggerService.debug?.(`Slot ${currentSlot} is skipped (404), trying next slot`);
         currentSlot++;
       }
     }
