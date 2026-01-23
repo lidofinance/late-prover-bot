@@ -124,33 +124,30 @@ class ErrorLogger {
   }
 
   private serializeError(err: unknown): string {
+    let errorObj: any;
     if (err instanceof Error) {
-      const serialized = JSON.stringify(
-        {
-          name: err.name,
-          message: err.message,
-          code: (err as any).code,
-          reason: (err as any).reason,
-          data: (err as any).data,
-          // Only include stack for non-production or if explicitly needed
-          ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
-          ...Object.getOwnPropertyNames(err).reduce(
-            (acc, key) => {
-              if (!['name', 'message', 'stack'].includes(key)) {
-                acc[key] = (err as any)[key];
-              }
-              return acc;
-            },
-            {} as Record<string, any>,
-          ),
-        },
-        null,
-        2,
-      );
-      return serialized;
+      errorObj = {
+        name: err.name,
+        message: err.message,
+        code: (err as any).code,
+        reason: (err as any).reason,
+        data: (err as any).data,
+        // Only include stack for non-production or if explicitly needed
+        ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+        ...Object.getOwnPropertyNames(err).reduce(
+          (acc, key) => {
+            if (!['name', 'message', 'stack', 'context', 'logged'].includes(key)) {
+              acc[key] = (err as any)[key];
+            }
+            return acc;
+          },
+          {} as Record<string, any>,
+        ),
+      };
     } else {
-      return JSON.stringify(err, null, 2);
+      errorObj = err;
     }
+    return JSON.stringify(errorObj, null, 2);
   }
 }
 
@@ -226,8 +223,6 @@ export class Execution {
     populateTxCallback: (...payload: any[]) => Promise<PopulatedTransaction>,
     payload: any[],
   ): Promise<void> {
-    this.logger.debug!(payload);
-
     // Step 1: Build transaction
     const tx = await populateTxCallback(...payload);
     const context: TransactionContext = { payload, tx };
@@ -323,12 +318,25 @@ export class Execution {
         `\n  Using: ${gasLimit.toLocaleString()} ✅`,
     );
 
-    const populated = await this.signer!.populateTransaction({
-      ...tx,
-      maxFeePerGas: gasParameters.maxFeePerGas,
-      maxPriorityFeePerGas: gasParameters.maxPriorityFeePerGas,
-      gasLimit: gasLimit,
-    });
+    // In DRY_RUN mode without a signer, we can't populate the transaction with signer details
+    // but we can still prepare the transaction object with gas parameters
+    let populated: any;
+    if (this.signer) {
+      populated = await this.signer.populateTransaction({
+        ...tx,
+        maxFeePerGas: gasParameters.maxFeePerGas,
+        maxPriorityFeePerGas: gasParameters.maxPriorityFeePerGas,
+        gasLimit: gasLimit,
+      });
+    } else {
+      // No signer available (e.g., DRY_RUN mode), create populated tx manually
+      populated = {
+        ...tx,
+        maxFeePerGas: gasParameters.maxFeePerGas,
+        maxPriorityFeePerGas: gasParameters.maxPriorityFeePerGas,
+        gasLimit: gasLimit,
+      };
+    }
 
     context.tx = populated;
     return populated;
@@ -560,7 +568,7 @@ export class Execution {
       stats.baseFeePerGas.pop();
 
       const batchFees = stats.baseFeePerGas.map((fee) => fee.toBigInt());
-      newGasFees = [...batchFees, ...newGasFees];
+      newGasFees = batchFees.concat(newGasFees);
 
       latestBlockToRequest -= currentBatchSize - 1;
       remainingBlocks -= currentBatchSize;
@@ -573,7 +581,7 @@ export class Execution {
     const existingCacheToKeep =
       this.gasFeeHistoryCache.length > newGasFees.length ? this.gasFeeHistoryCache.slice(newGasFees.length) : [];
 
-    this.gasFeeHistoryCache = [...existingCacheToKeep, ...newGasFees];
+    this.gasFeeHistoryCache = existingCacheToKeep.concat(newGasFees);
   }
 
   // ==========================================

@@ -10,6 +10,7 @@ import { RootsProcessor } from './services/roots-processor';
 import { RootsProvider } from './services/roots-provider';
 import sleep from './utils/sleep';
 import { ConfigService } from '../common/config/config.service';
+import { serializeError } from '../common/logger/safe-error-format';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
 
@@ -36,9 +37,7 @@ export class DaemonService implements OnModuleInit {
     const name = APP_NAME;
     const DAEMON_SLEEP_INTERVAL_MS = this.config.get('DAEMON_SLEEP_INTERVAL_MS');
     const WORKING_MODE = this.config.get('WORKING_MODE');
-    const START_ROOT = this.config.get('START_ROOT') ?? 'None';
-    const START_SLOT = this.config.get('START_SLOT') ?? 'None';
-    const START_EPOCH = this.config.get('START_EPOCH') ?? 'None';
+    const START_LOOKBACK_DAYS = this.config.get('START_LOOKBACK_DAYS');
     const LIDO_LOCATOR_ADDRESS = this.config.get('LIDO_LOCATOR_ADDRESS');
     const TX_SIGNER_PRIVATE_KEY = this.config.get('TX_SIGNER_PRIVATE_KEY');
     let account = 'None';
@@ -78,9 +77,7 @@ export class DaemonService implements OnModuleInit {
       name: name,
       ACCOUNT: account,
       WORKING_MODE: WORKING_MODE,
-      START_ROOT: START_ROOT,
-      START_SLOT: START_SLOT,
-      START_EPOCH: START_EPOCH,
+      START_LOOKBACK_DAYS: START_LOOKBACK_DAYS.toString(),
       LIDO_LOCATOR_ADDRESS: LIDO_LOCATOR_ADDRESS,
       DAEMON_SLEEP_INTERVAL_MS: DAEMON_SLEEP_INTERVAL_MS.toString(),
       TX_MIN_GAS_PRIORITY_FEE: TX_MIN_GAS_PRIORITY_FEE.toString(),
@@ -126,7 +123,7 @@ export class DaemonService implements OnModuleInit {
       try {
         await this.baseRun();
       } catch (error) {
-        this.logger.error('Error in daemon loop', this.serializeError(error));
+        this.logger.error('Error in daemon loop', serializeError(error));
 
         // Track daemon sleep due to error
         this.prometheus.daemonSleepCount.inc({
@@ -202,33 +199,10 @@ export class DaemonService implements OnModuleInit {
           `\n  Processing time: ${Date.now() - baseRunStartTime}ms`,
       );
     } catch (error) {
-      this.logger.error('Failed to process roots', this.serializeError(error));
+      this.logger.error('Failed to process roots', serializeError(error));
       throw error;
     } finally {
       stopRootsProcessorTimer();
-    }
-  }
-
-  private serializeError(err: unknown): string {
-    if (err instanceof Error) {
-      return JSON.stringify(
-        {
-          name: err.name,
-          message: err.message,
-          stack: err.stack,
-          ...Object.getOwnPropertyNames(err).reduce(
-            (acc, key) => {
-              acc[key] = (err as any)[key];
-              return acc;
-            },
-            {} as Record<string, any>,
-          ),
-        },
-        null,
-        2,
-      );
-    } else {
-      return JSON.stringify(err, null, 2);
     }
   }
 }

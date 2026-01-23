@@ -12,7 +12,7 @@ export type RetryOptions = RequestOptions &
     useFallbackOnResolved?: (data: any) => boolean;
   };
 
-class RequestError extends Error {
+export class RequestError extends Error {
   constructor(
     message: string,
     public readonly statusCode?: number,

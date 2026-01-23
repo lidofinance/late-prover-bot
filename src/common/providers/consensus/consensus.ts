@@ -73,6 +73,10 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return this.genesisTimestamp + slot * Number(this.beaconConfig.SECONDS_PER_SLOT);
   }
 
+  public timestampToSlot(timestamp: number): number {
+    return Math.floor((timestamp - this.genesisTimestamp) / Number(this.beaconConfig.SECONDS_PER_SLOT));
+  }
+
   public epochToSlot(epoch: number): number {
     return epoch * Number(this.beaconConfig.SLOTS_PER_EPOCH);
   }

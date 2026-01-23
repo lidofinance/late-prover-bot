@@ -1,3 +1,4 @@
+import { SECRET_REPLACER, regExpEscape } from '@lido-nestjs/logger';
 import { Transform, plainToInstance } from 'class-transformer';
 import {
   ArrayMinSize,
@@ -7,7 +8,6 @@ import {
   IsInt,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
   Max,
   Min,
@@ -38,19 +38,10 @@ export class EnvironmentVariables {
   @IsEnum(WorkingMode)
   public WORKING_MODE = WorkingMode.Daemon;
 
-  @IsOptional()
-  @IsString()
-  public START_ROOT?: string;
-
-  @IsOptional()
   @IsNumber()
+  @Min(1)
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public START_SLOT?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public START_EPOCH?: number;
+  public START_LOOKBACK_DAYS = 7; // Default to 7 days lookback
 
   @IsNotEmpty()
   @IsString()
@@ -177,11 +168,36 @@ export function validate(config: Record<string, unknown>) {
   const errors = validateSync(validatedConfig, validatorOptions);
 
   if (errors.length > 0) {
-    console.error(errors.toString());
+    const errorString = errors.toString();
+    const sanitizedError = sanitizeValidationErrors(errorString, config);
+    console.error('Configuration validation failed:');
+    console.error(sanitizedError);
     process.exit(1);
   }
 
   return validatedConfig;
+}
+
+/**
+ * Sanitize validation error messages to prevent leaking sensitive data
+ * Uses the same sanitization logic as @lido-nestjs/logger cleanSecrets format
+ */
+function sanitizeValidationErrors(errorString: string, config: Record<string, unknown>): string {
+  const sensitiveKeys = ['TX_SIGNER_PRIVATE_KEY', 'EL_RPC_URLS', 'CL_API_URLS'];
+
+  const secrets: string[] = [];
+  for (const key of sensitiveKeys) {
+    const value = config[key];
+    if (value) {
+      const values = Array.isArray(value) ? value : [value];
+      secrets.push(...values.filter((v): v is string => typeof v === 'string' && v.length > 0));
+    }
+  }
+
+  return secrets.reduce((sanitized, secret) => {
+    const re = new RegExp(regExpEscape(secret), 'g');
+    return sanitized.replace(re, SECRET_REPLACER);
+  }, errorString);
 }
 
 const toBoolean = (value: any): boolean => {

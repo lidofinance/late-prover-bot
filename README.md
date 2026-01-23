@@ -25,7 +25,7 @@ The bot runs as a daemon that continuously processes beacon chain roots:
 
 1. **Get finalized beacon chain root**
    - Fetches the latest finalized beacon chain header
-   - Determines the previous root to process (from storage, START_ROOT, or parent root)
+   - Determines the previous root to process (from memory, or lookback period if starting fresh)
 
 2. **Process block range**
    - Processes execution layer blocks between previous and current beacon chain roots
@@ -55,6 +55,14 @@ The bot runs as a daemon that continuously processes beacon chain roots:
 - **Comprehensive monitoring**: Tracks processing via Prometheus metrics
 
 </details>
+
+### Dry Run Mode
+
+When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
+
+**Behavior:**
+- ✅ **No transactions sent**: All transaction preparations are logged but not submitted to blockchain
+- ✅ **Full visibility**: You can observe what the bot would do in real-time
 
 ## Getting Started
 
@@ -153,9 +161,7 @@ yarn run start:prod
 | `TX_MINING_WAITING_TIMEOUT_MS` | Transaction mining timeout | no | `3600000` (1 hour) |
 | `TX_CONFIRMATIONS` | Required confirmations | no | `1` |
 | **Startup Options** | | | |
-| `START_ROOT` | Start from specific beacon chain root | no | |
-| `START_SLOT` | Start from specific beacon chain slot | no | |
-| `START_EPOCH` | Start from specific beacon chain epoch | no | |
+| `START_LOOKBACK_DAYS` | Number of days to look back when starting (if no last processed root in memory) | no | `7` |
 | **Logging** | | | |
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | no | `info` |
 | `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
