@@ -30,7 +30,24 @@ export class VerifierContract implements OnModuleInit {
 
       this.contract = new ethers.Contract(this.verifierAddress, iface, this.execution.provider);
 
-      this.logger.log('VerifierContract initialized successfully');
+      // Log important contract configuration
+      const firstSupportedSlot = await this.contract.FIRST_SUPPORTED_SLOT();
+      const genesisTime = await this.contract.GENESIS_TIME();
+      const secondsPerSlot = await this.contract.SECONDS_PER_SLOT();
+      const slotsPerHistoricalRoot = await this.contract.SLOTS_PER_HISTORICAL_ROOT();
+      const pivotSlot = await this.contract.PIVOT_SLOT();
+      const capellaSlot = await this.contract.CAPELLA_SLOT();
+
+      this.logger.log(
+        `VerifierContract initialized successfully:` +
+          `\n  Address: ${this.verifierAddress}` +
+          `\n  FIRST_SUPPORTED_SLOT: ${firstSupportedSlot}` +
+          `\n  GENESIS_TIME: ${genesisTime}` +
+          `\n  SECONDS_PER_SLOT: ${secondsPerSlot}` +
+          `\n  SLOTS_PER_HISTORICAL_ROOT: ${slotsPerHistoricalRoot}` +
+          `\n  PIVOT_SLOT: ${pivotSlot}` +
+          `\n  CAPELLA_SLOT: ${capellaSlot}`,
+      );
     } catch (error) {
       this.logger.error('Failed to initialize VerifierContract:', error.message);
       throw error;

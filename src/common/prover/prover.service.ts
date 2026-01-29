@@ -71,7 +71,7 @@ export class ProverService implements OnModuleInit {
       // Calculate block range for last 7 days
       const currentBlock = await this.execution.provider.getBlockNumber();
       const SECONDS_PER_DAY = 24 * 60 * 60;
-      const DAYS_TO_LOOK_BACK = 7;
+      const DAYS_TO_LOOK_BACK = 30;
       const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
 
       const blocksToLookBack = Math.floor((DAYS_TO_LOOK_BACK * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
@@ -563,17 +563,49 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
     const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
+    const finalizedSlot = Number(finalizedBlockHeader.header.message.slot);
+
+    // Try to get child slot (finalized + 1) for timestamp
+    // EIP-4788: child's timestamp stores finalized's root (child's parent)
+    let rootsTimestamp: number;
+    let timestampSource: string;
+
+    try {
+      // Only use immediate next slot, don't skip
+      const childSlotNumber = finalizedSlot + 1;
+      const childHeader = await this.consensus.getBeaconHeader(childSlotNumber.toString());
+      const childBlock = await this.consensus.getBlockInfo(childHeader.root);
+      rootsTimestamp = Number(childBlock.body.executionPayload.timestamp);
+      timestampSource = `child slot ${childSlotNumber}`;
+    } catch (error) {
+      // Child slot might be skipped or not available yet, use calculated timestamp
+      rootsTimestamp = this.calcRootsTimestamp(finalizedSlot);
+      timestampSource = 'calculated (child slot unavailable)';
+    }
 
     const provableFinalizedBlockHeader = {
       header: {
-        slot: Number(finalizedBlockHeader.header.message.slot),
+        slot: finalizedSlot,
         proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
         parentRoot: finalizedBlockHeader.header.message.parent_root,
         stateRoot: finalizedBlockHeader.header.message.state_root,
         bodyRoot: finalizedBlockHeader.header.message.body_root,
       },
-      rootsTimestamp: this.calcRootsTimestamp(Number(finalizedBlockHeader.header.message.slot)),
+      rootsTimestamp: rootsTimestamp,
     };
+
+    const calculatedTimestamp = this.calcRootsTimestamp(finalizedSlot);
+
+    this.loggerService.log(
+      `[Blocks ${fromBlock}-${toBlock}] DEBUG provableFinalizedBlockHeader:` +
+        `\n  Finalized slot: ${finalizedSlot}` +
+        `\n  rootsTimestamp: ${rootsTimestamp} (from ${timestampSource})` +
+        `\n  Calculated timestamp: ${calculatedTimestamp}` +
+        `\n  Diff: ${rootsTimestamp - calculatedTimestamp}s` +
+        `\n  Genesis timestamp: ${this.consensus.genesisTimestamp}` +
+        `\n  SECONDS_PER_SLOT: ${this.consensus.beaconConfig.SECONDS_PER_SLOT}` +
+        `\n  Block root: ${finalizedBlockHeader.root}`,
+    );
 
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
@@ -797,15 +829,39 @@ export class ProverService implements OnModuleInit {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
+      // First, find the actual available slot (deadline slot might be skipped)
+      const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
+
       this.loggerService.log(
         `Processing historical batch ${i + 1}/${batches.length}:` +
-          `\n  Slot: ${deadlineSlot}` +
+          `\n  Requested deadline slot: ${deadlineSlot}` +
+          `\n  Actual available slot: ${actualSlot}` +
           `\n  Validators in batch: ${batch.length}`,
       );
 
-      const summaryIndex = this.calcSummaryIndex(deadlineSlot);
-      const rootIndexInSummary = this.calcRootIndexInSummary(deadlineSlot);
+      // Use the ACTUAL slot for all calculations, not the requested deadline slot
+      const summaryIndex = this.calcSummaryIndex(actualSlot);
+      const rootIndexInSummary = this.calcRootIndexInSummary(actualSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
+
+      // Debug: Log historical summary calculation details
+      const capellaForkEpoch = Number(this.consensus.beaconConfig.CAPELLA_FORK_EPOCH);
+      const capellaForkSlot = this.consensus.epochToSlot(capellaForkEpoch);
+      const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
+
+      this.loggerService.log(
+        `DEBUG Historical summary calculation:` +
+          `\n  actualSlot (used for proof): ${actualSlot}` +
+          `\n  CAPELLA_FORK_EPOCH: ${capellaForkEpoch}` +
+          `\n  capellaForkSlot: ${capellaForkSlot}` +
+          `\n  SLOTS_PER_HISTORICAL_ROOT: ${slotsPerHistoricalRoot}` +
+          `\n  summaryIndex: ${summaryIndex}` +
+          `\n  summarySlot: ${summarySlot}` +
+          `\n  rootIndexInSummary: ${rootIndexInSummary}` +
+          `\n  provableFinalizedBlockHeader.slot: ${provableFinalizedBlockHeader.header.slot}` +
+          `\n  Is summarySlot <= finalized? ${summarySlot <= provableFinalizedBlockHeader.header.slot}`,
+      );
+
       const summaryState = await this.consensus.getState(summarySlot);
 
       let summaryStateView;
@@ -834,11 +890,9 @@ export class ProverService implements OnModuleInit {
         rootIndexInSummary,
       );
 
-      const { header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-
       const oldBlock = {
         header: {
-          slot: Number(deadlineBlockHeader.header.message.slot),
+          slot: actualSlot, // Use actualSlot to be consistent
           proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
           parentRoot: deadlineBlockHeader.header.message.parent_root,
           stateRoot: deadlineBlockHeader.header.message.state_root,
@@ -846,6 +900,17 @@ export class ProverService implements OnModuleInit {
         },
         proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
       };
+
+      this.loggerService.log(
+        `DEBUG Historical verification params (batch ${i + 1}/${batches.length}):` +
+          `\n  provableFinalizedBlockHeader.slot: ${provableFinalizedBlockHeader.header.slot}` +
+          `\n  provableFinalizedBlockHeader.rootsTimestamp: ${provableFinalizedBlockHeader.rootsTimestamp}` +
+          `\n  oldBlock.slot: ${oldBlock.header.slot}` +
+          `\n  rootIndexInSummary: ${rootIndexInSummary} (should match slot % 8192 = ${actualSlot % 8192})` +
+          `\n  summaryIndex: ${summaryIndex}` +
+          `\n  summarySlot: ${summarySlot}` +
+          `\n  proof length: ${oldBlock.proof.length}`,
+      );
 
       try {
         // Use execution service for transaction handling
