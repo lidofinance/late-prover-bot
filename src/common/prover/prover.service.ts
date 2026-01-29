@@ -593,20 +593,6 @@ export class ProverService implements OnModuleInit {
       },
       rootsTimestamp: rootsTimestamp,
     };
-
-    const calculatedTimestamp = this.calcRootsTimestamp(finalizedSlot);
-
-    this.loggerService.log(
-      `[Blocks ${fromBlock}-${toBlock}] DEBUG provableFinalizedBlockHeader:` +
-        `\n  Finalized slot: ${finalizedSlot}` +
-        `\n  rootsTimestamp: ${rootsTimestamp} (from ${timestampSource})` +
-        `\n  Calculated timestamp: ${calculatedTimestamp}` +
-        `\n  Diff: ${rootsTimestamp - calculatedTimestamp}s` +
-        `\n  Genesis timestamp: ${this.consensus.genesisTimestamp}` +
-        `\n  SECONDS_PER_SLOT: ${this.consensus.beaconConfig.SECONDS_PER_SLOT}` +
-        `\n  Block root: ${finalizedBlockHeader.root}`,
-    );
-
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
     let finalizedStateView;
@@ -900,17 +886,6 @@ export class ProverService implements OnModuleInit {
         },
         proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
       };
-
-      this.loggerService.log(
-        `DEBUG Historical verification params (batch ${i + 1}/${batches.length}):` +
-          `\n  provableFinalizedBlockHeader.slot: ${provableFinalizedBlockHeader.header.slot}` +
-          `\n  provableFinalizedBlockHeader.rootsTimestamp: ${provableFinalizedBlockHeader.rootsTimestamp}` +
-          `\n  oldBlock.slot: ${oldBlock.header.slot}` +
-          `\n  rootIndexInSummary: ${rootIndexInSummary} (should match slot % 8192 = ${actualSlot % 8192})` +
-          `\n  summaryIndex: ${summaryIndex}` +
-          `\n  summarySlot: ${summarySlot}` +
-          `\n  proof length: ${oldBlock.proof.length}`,
-      );
 
       try {
         // Use execution service for transaction handling

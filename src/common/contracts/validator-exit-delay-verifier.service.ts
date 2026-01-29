@@ -30,7 +30,6 @@ export class VerifierContract implements OnModuleInit {
 
       this.contract = new ethers.Contract(this.verifierAddress, iface, this.execution.provider);
 
-      // Log important contract configuration
       const firstSupportedSlot = await this.contract.FIRST_SUPPORTED_SLOT();
       const genesisTime = await this.contract.GENESIS_TIME();
       const secondsPerSlot = await this.contract.SECONDS_PER_SLOT();
