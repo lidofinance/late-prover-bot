@@ -565,21 +565,6 @@ export class ProverService implements OnModuleInit {
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
     const finalizedSlot = Number(finalizedBlockHeader.header.message.slot);
 
-    // Try to get child slot (finalized + 1) for timestamp
-    // EIP-4788: child's timestamp stores finalized's root (child's parent)
-    let rootsTimestamp: number;
-
-    try {
-      // Only use immediate next slot, don't skip
-      const childSlotNumber = finalizedSlot + 1;
-      const childHeader = await this.consensus.getBeaconHeader(childSlotNumber.toString());
-      const childBlock = await this.consensus.getBlockInfo(childHeader.root);
-      rootsTimestamp = Number(childBlock.body.executionPayload.timestamp);
-    } catch (error) {
-      // Child slot might be skipped or not available yet, use calculated timestamp
-      rootsTimestamp = this.calcRootsTimestamp(finalizedSlot);
-    }
-
     const provableFinalizedBlockHeader = {
       header: {
         slot: finalizedSlot,
@@ -588,7 +573,7 @@ export class ProverService implements OnModuleInit {
         stateRoot: finalizedBlockHeader.header.message.state_root,
         bodyRoot: finalizedBlockHeader.header.message.body_root,
       },
-      rootsTimestamp: rootsTimestamp,
+      rootsTimestamp: this.calcRootsTimestamp(finalizedSlot),
     };
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
