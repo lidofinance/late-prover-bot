@@ -2,6 +2,7 @@ import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
 
+import { ConfigService } from '../config/config.service';
 import { NodeOperatorsRegistryContract } from '../contracts/nor.service';
 import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
@@ -43,6 +44,7 @@ export class ProverService implements OnModuleInit {
     protected readonly stakingRouter: StakingRouterContract,
     protected readonly execution: Execution,
     protected readonly prometheus: PrometheusService,
+    protected readonly config: ConfigService,
     @Inject('VALIDATOR_BATCH_SIZE') private readonly validatorBatchSize: number,
   ) {}
 
@@ -53,7 +55,7 @@ export class ProverService implements OnModuleInit {
         `SHARD_COMMITTEE_PERIOD_IN_SECONDS from contract: ${this.SHARD_COMMITTEE_PERIOD_IN_SECONDS}`,
       );
 
-      // Initialize storage with last 7 days of validator events
+      // Initialize storage with validator events from configured lookback period
       await this.initializeStorageWithRecentEvents();
     } catch (error) {
       this.loggerService.error('Failed to initialize ProverService:', error.message);
@@ -62,26 +64,26 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * Initialize storage with validator events from the last 7 days
+   * Initialize storage with validator events from the configured lookback period (START_LOOKBACK_DAYS)
    */
   private async initializeStorageWithRecentEvents(): Promise<void> {
     try {
       this.loggerService.log('Initializing storage with recent validator events...');
 
-      // Calculate block range for last 7 days
+      // Calculate block range for configured lookback period
       const currentBlock = await this.execution.provider.getBlockNumber();
       const SECONDS_PER_DAY = 24 * 60 * 60;
-      const DAYS_TO_LOOK_BACK = 30;
+      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS');
       const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
 
-      const blocksToLookBack = Math.floor((DAYS_TO_LOOK_BACK * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
+      const blocksToLookBack = Math.floor((daysToLookBack * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
       const fromBlock = Math.max(1, currentBlock - blocksToLookBack);
 
       this.loggerService.log(
         `Scanning for exit requests in recent blocks:` +
           `\n  Current block: ${currentBlock}` +
           `\n  From block: ${fromBlock}` +
-          `\n  Block range: ${blocksToLookBack} blocks (${DAYS_TO_LOOK_BACK} days)`,
+          `\n  Block range: ${blocksToLookBack} blocks (${daysToLookBack} days)`,
       );
 
       // Use the same batch processing but without eligible validator processing
@@ -806,7 +808,6 @@ export class ProverService implements OnModuleInit {
           `\n  Validators in batch: ${batch.length}`,
       );
 
-      // Use the ACTUAL slot for all calculations, not the requested deadline slot
       const summaryIndex = this.calcSummaryIndex(actualSlot);
       const rootIndexInSummary = this.calcRootIndexInSummary(actualSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
@@ -840,7 +841,7 @@ export class ProverService implements OnModuleInit {
 
       const oldBlock = {
         header: {
-          slot: actualSlot, // Use actualSlot to be consistent
+          slot: actualSlot,
           proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
           parentRoot: deadlineBlockHeader.header.message.parent_root,
           stateRoot: deadlineBlockHeader.header.message.state_root,
