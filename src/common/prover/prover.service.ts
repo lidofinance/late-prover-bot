@@ -568,7 +568,6 @@ export class ProverService implements OnModuleInit {
     // Try to get child slot (finalized + 1) for timestamp
     // EIP-4788: child's timestamp stores finalized's root (child's parent)
     let rootsTimestamp: number;
-    let timestampSource: string;
 
     try {
       // Only use immediate next slot, don't skip
@@ -576,11 +575,9 @@ export class ProverService implements OnModuleInit {
       const childHeader = await this.consensus.getBeaconHeader(childSlotNumber.toString());
       const childBlock = await this.consensus.getBlockInfo(childHeader.root);
       rootsTimestamp = Number(childBlock.body.executionPayload.timestamp);
-      timestampSource = `child slot ${childSlotNumber}`;
     } catch (error) {
       // Child slot might be skipped or not available yet, use calculated timestamp
       rootsTimestamp = this.calcRootsTimestamp(finalizedSlot);
-      timestampSource = 'calculated (child slot unavailable)';
     }
 
     const provableFinalizedBlockHeader = {
@@ -815,7 +812,6 @@ export class ProverService implements OnModuleInit {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
-      // First, find the actual available slot (deadline slot might be skipped)
       const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
 
       this.loggerService.log(
@@ -829,25 +825,6 @@ export class ProverService implements OnModuleInit {
       const summaryIndex = this.calcSummaryIndex(actualSlot);
       const rootIndexInSummary = this.calcRootIndexInSummary(actualSlot);
       const summarySlot = this.calcSlotOfSummary(summaryIndex);
-
-      // Debug: Log historical summary calculation details
-      const capellaForkEpoch = Number(this.consensus.beaconConfig.CAPELLA_FORK_EPOCH);
-      const capellaForkSlot = this.consensus.epochToSlot(capellaForkEpoch);
-      const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
-
-      this.loggerService.log(
-        `DEBUG Historical summary calculation:` +
-          `\n  actualSlot (used for proof): ${actualSlot}` +
-          `\n  CAPELLA_FORK_EPOCH: ${capellaForkEpoch}` +
-          `\n  capellaForkSlot: ${capellaForkSlot}` +
-          `\n  SLOTS_PER_HISTORICAL_ROOT: ${slotsPerHistoricalRoot}` +
-          `\n  summaryIndex: ${summaryIndex}` +
-          `\n  summarySlot: ${summarySlot}` +
-          `\n  rootIndexInSummary: ${rootIndexInSummary}` +
-          `\n  provableFinalizedBlockHeader.slot: ${provableFinalizedBlockHeader.header.slot}` +
-          `\n  Is summarySlot <= finalized? ${summarySlot <= provableFinalizedBlockHeader.header.slot}`,
-      );
-
       const summaryState = await this.consensus.getState(summarySlot);
 
       let summaryStateView;
