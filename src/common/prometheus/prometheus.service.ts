@@ -23,6 +23,7 @@ import {
   METRIC_EXIT_ALREADY_PROCESSED_COUNT,
   METRIC_EXIT_DEADLINE_FUTURE_COUNT,
   METRIC_EXIT_DEADLINE_MISSED_COUNT,
+  METRIC_EXIT_INITIATED_COUNT,
   METRIC_EXIT_REQUESTS_FOUND_COUNT,
   METRIC_EXIT_REQUESTS_PROCESSED_COUNT,
   METRIC_HIGH_GAS_FEE_INTERRUPTIONS_COUNT,
@@ -342,6 +343,12 @@ export class PrometheusService {
   public exitDeadlineFutureCount = this.getOrCreateMetric('Counter', {
     name: METRIC_EXIT_DEADLINE_FUTURE_COUNT,
     help: 'Count of future exit deadlines',
+    labelNames: ['module_id'],
+  });
+
+  public exitInitiatedCount = this.getOrCreateMetric('Counter', {
+    name: METRIC_EXIT_INITIATED_COUNT,
+    help: 'Count of validators skipped because a CL exit was already initiated before the deadline',
     labelNames: ['module_id'],
   });
 
