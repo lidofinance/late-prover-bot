@@ -17,7 +17,9 @@ const makePrometheusMock = () => ({
 const makeLogger = () => ({ log: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() });
 
 // Minimal validator input as returned by decodeValidatorsData
-const makeValidatorInput = (overrides: Partial<{ validatorIndex: bigint; moduleId: bigint; nodeOpId: bigint; validatorPubkey: string }> = {}) => ({
+const makeValidatorInput = (
+  overrides: Partial<{ validatorIndex: bigint; moduleId: bigint; nodeOpId: bigint; validatorPubkey: string }> = {},
+) => ({
   validatorIndex: BigInt(1039010),
   moduleId: BigInt(1),
   nodeOpId: BigInt(42),
@@ -51,15 +53,15 @@ const makeService = (overrides: Record<string, any> = {}) => {
   };
 
   const service = new (ProverService as any)(
-    makeLogger(),            // loggerService
-    consensus,               // consensus
-    {},                      // exitRequests
-    {},                      // verifier
-    {},                      // stakingRouter
-    {},                      // execution
-    makePrometheusMock(),    // prometheus
-    {},                      // config
-    50,                      // validatorBatchSize
+    makeLogger(), // loggerService
+    consensus, // consensus
+    {}, // exitRequests
+    {}, // verifier
+    {}, // stakingRouter
+    {}, // execution
+    makePrometheusMock(), // prometheus
+    {}, // config
+    50, // validatorBatchSize
   );
 
   // Set private fields that are normally initialised in onModuleInit
@@ -84,7 +86,7 @@ describe('ProverService.processValidator - exit epoch filtering', () => {
       makeStateView(exitEpoch),
       PROOF_SLOT_TIMESTAMP,
       DELIVERED_TIMESTAMP,
-      0,   // fromBlock
+      0, // fromBlock
       100, // toBlock
     );
 
