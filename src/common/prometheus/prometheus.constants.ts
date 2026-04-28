@@ -58,6 +58,7 @@ export const METRIC_MEMORY_USAGE_BYTES = `memory_usage_bytes`;
 export const METRIC_EXIT_ALREADY_PROCESSED_COUNT = `exit_already_processed_count`;
 export const METRIC_EXIT_DEADLINE_MISSED_COUNT = `exit_deadline_missed_count`;
 export const METRIC_EXIT_DEADLINE_FUTURE_COUNT = `exit_deadline_future_count`;
+export const METRIC_EXIT_INITIATED_COUNT = `exit_initiated_count`;
 export const METRIC_BEACON_STATE_FETCH_DURATION_SECONDS = `beacon_state_fetch_duration_seconds`;
 export const METRIC_BEACON_STATE_DESERIALIZATION_DURATION_SECONDS = `beacon_state_deserialization_duration_seconds`;
 

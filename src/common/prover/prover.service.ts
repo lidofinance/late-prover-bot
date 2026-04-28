@@ -355,6 +355,27 @@ export class ProverService implements OnModuleInit {
       return null;
     }
 
+    // The contract hardcodes FAR_FUTURE_EPOCH when reconstructing the validator leaf for proof
+    // verification, so a validator with exitEpoch already set (voluntary exit initiated but not
+    // yet past the deadline) would always produce InvalidProof(). Skip such validators.
+    if (deadlineStateValidator.exitEpoch !== Infinity) {
+      this.prometheus.validatorsSkippedCount.inc({
+        module_id: moduleId,
+        reason: 'exit_initiated',
+      });
+      this.prometheus.exitInitiatedCount.inc({ module_id: moduleId });
+
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] Validator skipped - exit already initiated:` +
+          `\n  Index: ${validatorIndex}` +
+          `\n  Public key: ${validator.validatorPubkey}` +
+          `\n  Exit epoch: ${deadlineStateValidator.exitEpoch}`,
+      );
+
+      stopValidatorTimer();
+      return null;
+    }
+
     const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
     if (proofSlotTimestamp < eligibleExitRequestTimestamp) {
       this.prometheus.exitDeadlineFutureCount.inc({
