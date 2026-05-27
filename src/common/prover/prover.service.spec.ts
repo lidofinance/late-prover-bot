@@ -166,3 +166,92 @@ describe('ProverService.processValidator - exit epoch filtering', () => {
     );
   });
 });
+
+// ─── decodeValidatorsData ─────────────────────────────────────────────────────
+
+describe('ProverService.decodeValidatorsData', () => {
+  const decode = (hex: string, dataFormat: number) => (makeService() as any).decodeValidatorsData(hex, dataFormat);
+
+  // Real tx 0xaa8dad0ec045cf251ed2c530e25c139dd71bd6dea35a99230715a40ae613b822
+  // submitReportData on Hoodi (chain 559024), block 2894999
+  // dataFormat=2 (DATA_FORMAT_LIST_WITH_KEY_INDEX), requestsCount=1
+  const REAL_TX_DATA_FORMAT_2 =
+    '0x' +
+    '000001' + // moduleId = 1  (3 bytes)
+    '0000000007' + // nodeOpId = 7  (5 bytes)
+    '0000000000103f8e' + // validatorIndex = 1064846  (8 bytes)
+    '0000000000000009' + // keyIndex = 9  (8 bytes)  ← format-2 extra field
+    'ae2fd379751dc0256d7ea54eca4d14f8456aec60bcd55397f17f2f01fee04381f5ee7c388ef1bcf0a53f9c5520798eba'; // pubkey (48 bytes)
+
+  it('format 2: correctly decodes the 72-byte real-world entry (regression for BigInt crash)', () => {
+    const entries = decode(REAL_TX_DATA_FORMAT_2, 2);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      exitDataIndex: 0,
+      moduleId: BigInt(1),
+      nodeOpId: BigInt(7),
+      validatorIndex: BigInt(1064846),
+      validatorPubkey:
+        '0xae2fd379751dc0256d7ea54eca4d14f8456aec60bcd55397f17f2f01fee04381f5ee7c388ef1bcf0a53f9c5520798eba',
+    });
+  });
+
+  it('format 2: old ENTRY_SIZE=64 code would have thrown "Cannot convert 0x to a BigInt"', () => {
+    // Manually reproduce the old broken behaviour so the regression is documented
+    const hex = REAL_TX_DATA_FORMAT_2.slice(2); // strip 0x
+    const data = Buffer.from(hex, 'hex');
+    expect(data.byteLength).toBe(72);
+
+    const ENTRY_SIZE_OLD = 64;
+    const entries = [];
+    for (let offset = 0; offset < data.byteLength; offset += ENTRY_SIZE_OLD) {
+      const entry = data.subarray(offset, offset + ENTRY_SIZE_OLD);
+      if (offset > 0) {
+        // second iteration: entry is 8 bytes, subarray(8,16) is empty → BigInt crash
+        expect(entry.subarray(8, 16).toString('hex')).toBe('');
+        expect(() => BigInt('0x' + entry.subarray(8, 16).toString('hex'))).toThrow(SyntaxError);
+        break;
+      }
+      entries.push(entry);
+    }
+  });
+
+  it('format 2: correctly assigns exitDataIndex when multiple 72-byte entries are present', () => {
+    // Two identical entries back-to-back
+    const single = REAL_TX_DATA_FORMAT_2.slice(2); // strip 0x
+    const twoEntries = '0x' + single + single;
+
+    const entries = decode(twoEntries, 2);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].exitDataIndex).toBe(0);
+    expect(entries[1].exitDataIndex).toBe(1);
+    expect(entries[1].moduleId).toBe(BigInt(1));
+  });
+
+  it('format 1: correctly decodes a 64-byte entry (existing behaviour unchanged)', () => {
+    // Build a format-1 entry (no keyIndex field)
+    const moduleId = '000001'; // 3 bytes
+    const nodeOpId = '0000000007'; // 5 bytes
+    const validatorIndex = '0000000000103f8e'; // 8 bytes
+    const pubkey = 'ab'.repeat(48); // 48 bytes
+    const hex = '0x' + moduleId + nodeOpId + validatorIndex + pubkey;
+
+    const entries = decode(hex, 1);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].moduleId).toBe(BigInt(1));
+    expect(entries[0].nodeOpId).toBe(BigInt(7));
+    expect(entries[0].validatorIndex).toBe(BigInt(1064846));
+    expect(entries[0].validatorPubkey).toBe('0x' + pubkey);
+  });
+
+  it('throws for unsupported data formats', () => {
+    expect(() => decode('0x', 3)).toThrow('Unsupported data format: 3');
+    expect(() => decode('0x', 0)).toThrow('Unsupported data format: 0');
+  });
+
+  it('returns empty array for empty data in any supported format', () => {
+    expect(decode('0x', 1)).toEqual([]);
+    expect(decode('0x', 2)).toEqual([]);
+  });
+});
