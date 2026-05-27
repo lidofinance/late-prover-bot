@@ -638,7 +638,10 @@ export class ProverService implements OnModuleInit {
         `\n  Data Format: ${exitRequest.exitRequestsData.dataFormat}`,
     );
 
-    const validators = this.decodeValidatorsData(exitRequest.exitRequestsData.data);
+    const validators = this.decodeValidatorsData(
+      exitRequest.exitRequestsData.data,
+      exitRequest.exitRequestsData.dataFormat,
+    );
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     this.loggerService.log(
@@ -1291,13 +1294,21 @@ export class ProverService implements OnModuleInit {
     return validatorsByDeadlineSlot;
   }
 
-  private decodeValidatorsData(encodedHex: string): {
+  private decodeValidatorsData(
+    encodedHex: string,
+    dataFormat: number = 1,
+  ): {
     exitDataIndex: number;
     moduleId: bigint;
     nodeOpId: bigint;
     validatorIndex: bigint;
     validatorPubkey: string;
   }[] {
+    // DATA_FORMAT_LIST (1):          64 bytes/entry: moduleId(3) + nodeOpId(5) + validatorIndex(8) + pubkey(48)
+    // DATA_FORMAT_LIST_WITH_KEY_INDEX (2): 72 bytes/entry: moduleId(3) + nodeOpId(5) + validatorIndex(8) + keyIndex(8) + pubkey(48)
+    const DATA_FORMAT_LIST = 1;
+    const DATA_FORMAT_LIST_WITH_KEY_INDEX = 2;
+
     // Remove '0x' prefix if present
     if (encodedHex.startsWith('0x')) {
       encodedHex = encodedHex.slice(2);
@@ -1305,7 +1316,19 @@ export class ProverService implements OnModuleInit {
 
     const data = Buffer.from(encodedHex, 'hex');
 
-    const ENTRY_SIZE = 64;
+    let ENTRY_SIZE: number;
+    let PUBKEY_OFFSET: number;
+
+    if (dataFormat === DATA_FORMAT_LIST_WITH_KEY_INDEX) {
+      ENTRY_SIZE = 72;
+      PUBKEY_OFFSET = 24; // moduleId(3) + nodeOpId(5) + validatorIndex(8) + keyIndex(8) = 24
+    } else if (dataFormat === DATA_FORMAT_LIST) {
+      ENTRY_SIZE = 64;
+      PUBKEY_OFFSET = 16; // moduleId(3) + nodeOpId(5) + validatorIndex(8) = 16
+    } else {
+      throw new Error(`Unsupported data format: ${dataFormat}`);
+    }
+
     const entries: {
       exitDataIndex: number;
       moduleId: bigint;
@@ -1321,7 +1344,7 @@ export class ProverService implements OnModuleInit {
       const moduleId = BigInt('0x' + entry.subarray(0, 3).toString('hex'));
       const nodeOpId = BigInt('0x' + entry.subarray(3, 8).toString('hex'));
       const validatorIndex = BigInt('0x' + entry.subarray(8, 16).toString('hex'));
-      const validatorPubkey = '0x' + entry.subarray(16, 64).toString('hex');
+      const validatorPubkey = '0x' + entry.subarray(PUBKEY_OFFSET, PUBKEY_OFFSET + 48).toString('hex');
 
       entries.push({
         exitDataIndex,
