@@ -45,11 +45,7 @@ const makeBlockWithExecutionPayload = (blockHash: string) => ({
   },
 });
 
-const makeService = (
-  consensus = makeConsensusMock(),
-  provider = makeProviderMock(),
-  prometheus = makePrometheus(),
-) =>
+const makeService = (consensus = makeConsensusMock(), provider = makeProviderMock(), prometheus = makePrometheus()) =>
   new (RootsProcessor as any)(
     makeLogger(), // logger
     {}, // config
@@ -252,8 +248,14 @@ describe('RootsProcessor.processBlockRoot', () => {
     });
 
     const service = new (RootsProcessor as any)(
-      makeLogger(), {}, prometheus, consensus,
-      { get: jest.fn(), set: jest.fn() }, prover, provider, {},
+      makeLogger(),
+      {},
+      prometheus,
+      consensus,
+      { get: jest.fn(), set: jest.fn() },
+      prover,
+      provider,
+      {},
     ) as any;
 
     await service.processBlockRoot(prevHeader, finalizedHeader);
