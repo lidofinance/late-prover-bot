@@ -10,7 +10,7 @@ import { serializeError } from '../../common/logger/safe-error-format';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
 import { getSizeRangeCategory } from '../../common/prometheus/decorators';
 import { ProverService } from '../../common/prover/prover.service';
-import { Consensus } from '../../common/providers/consensus/consensus';
+import { Consensus, SupportedFork } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
 
 @Injectable()
@@ -59,15 +59,17 @@ export class RootsProcessor {
   private async processBlockRoot(prevHeader: BlockHeaderResponse, finalizedHeader: BlockHeaderResponse): Promise<void> {
     const processingStartTime = Date.now();
 
-    // CL blocks handling
-    const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
-    const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
-    const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash);
-    const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash);
+    // Resolve EL block info for both CL checkpoints.
+    // Post-ePBS (GLOAS): execution_payload is absent from BeaconBlockBody.
+    // Use state.latestExecutionPayloadHeader (last *revealed* EL block, slot N-1) instead,
+    // which guarantees deposit symmetry with the CL state.
+    const [prevElInfo, finalizedElInfo] = await Promise.all([
+      this.resolveElBlockInfo(prevHeader),
+      this.resolveElBlockInfo(finalizedHeader),
+    ]);
 
-    // EL blocks handling
-    const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number;
-    const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number;
+    const prevBlockNumber = prevElInfo.blockNumber;
+    const finalizedBlockNumber = finalizedElInfo.blockNumber;
 
     const blockRange = finalizedBlockNumber - prevBlockNumber;
     const rangeSizeCategory = getSizeRangeCategory(blockRange);
@@ -109,6 +111,23 @@ export class RootsProcessor {
     } finally {
       stopBlockRangeTimer();
     }
+  }
+
+  /**
+   * Resolve EL block hash and number for a given CL block header.
+   * - Pre-ePBS: reads executionPayload from the block body, then fetches EL block number.
+   * - Post-ePBS (GLOAS): reads latestExecutionPayloadHeader from beacon state directly.
+   */
+  private async resolveElBlockInfo(header: BlockHeaderResponse): Promise<{ blockHash: string; blockNumber: number }> {
+    const { block, forkName } = await this.consensus.getBlockInfo(header.root);
+
+    if (forkName === SupportedFork.gloas) {
+      return this.consensus.getStateElBlockInfo(header.header.message.state_root);
+    }
+
+    const blockHash = hexlify((block as any).body.executionPayload.blockHash);
+    const blockNumber = (await this.provider.getBlock(blockHash)).number;
+    return { blockHash, blockNumber };
   }
 
   /**

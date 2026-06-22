@@ -13,18 +13,25 @@ import { RequestOptions } from '../base/utils/func';
 
 let ssz: typeof sszType;
 
-enum SupportedFork {
+export enum SupportedFork {
   capella = 'capella',
   deneb = 'deneb',
   electra = 'electra',
   fulu = 'fulu',
+  gloas = 'gloas',
 }
 
 export type SupportedBlock =
   | ValueOfFields<typeof ssz.capella.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.deneb.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.electra.BeaconBlock.fields>
-  | ValueOfFields<typeof ssz.fulu.BeaconBlock.fields>;
+  | ValueOfFields<typeof ssz.fulu.BeaconBlock.fields>
+  | ValueOfFields<typeof ssz.gloas.BeaconBlock.fields>;
+
+export interface BlockElInfo {
+  blockHash: string;
+  blockNumber: number;
+}
 
 export interface State {
   bodyBytes: Uint8Array;
@@ -97,7 +104,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return jsonBody.data;
   }
 
-  public async getBlockInfo(blockId: BlockId): Promise<SupportedBlock> {
+  public async getBlockInfo(blockId: BlockId): Promise<{ block: SupportedBlock; forkName: SupportedFork }> {
     const { body, headers } = await this.retryRequest((baseUrl) =>
       this.baseGet(baseUrl, this.endpoints.blockInfo(blockId)),
     );
@@ -106,7 +113,27 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const jsonBody = (await body.json()) as { data: { message: JSON } };
-    return ssz[forkName as SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
+    const block = ssz[forkName as SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
+    return { block, forkName: forkName as SupportedFork };
+  }
+
+  /**
+   * Returns EL block hash and number anchored to the given beacon state.
+   *
+   * Post-ePBS (GLOAS): execution_payload is absent from BeaconBlockBody.
+   * The state's latestExecutionPayloadHeader holds the last revealed EL block (slot N-1),
+   * which guarantees deposit symmetry. We read blockHash and blockNumber from there
+   * instead of from the block body.
+   */
+  public async getStateElBlockInfo(stateId: StateId): Promise<BlockElInfo> {
+    const state = await this.getState(stateId);
+    const stateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+    const header = stateView.latestExecutionPayloadHeader;
+    const blockHashHex = '0x' + Buffer.from(header.blockHash as Uint8Array).toString('hex');
+    return {
+      blockHash: blockHashHex,
+      blockNumber: header.blockNumber as number,
+    };
   }
 
   public async getBeaconHeader(blockId: BlockId): Promise<BlockHeaderResponse> {
