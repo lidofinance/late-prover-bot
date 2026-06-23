@@ -58,11 +58,6 @@ export class RootsProcessor {
    */
   private async processBlockRoot(prevHeader: BlockHeaderResponse, finalizedHeader: BlockHeaderResponse): Promise<void> {
     const processingStartTime = Date.now();
-
-    // Resolve EL block info for both CL checkpoints.
-    // Post-ePBS (GLOAS): execution_payload is absent from BeaconBlockBody.
-    // Use state.latestExecutionPayloadHeader (last *revealed* EL block, slot N-1) instead,
-    // which guarantees deposit symmetry with the CL state.
     const [prevElInfo, finalizedElInfo] = await Promise.all([
       this.resolveElBlockInfo(prevHeader),
       this.resolveElBlockInfo(finalizedHeader),
@@ -113,11 +108,6 @@ export class RootsProcessor {
     }
   }
 
-  /**
-   * Resolve EL block hash and number for a given CL block header.
-   * - Pre-ePBS: reads executionPayload from the block body, then fetches EL block number.
-   * - Post-ePBS (GLOAS): reads latestExecutionPayloadHeader from beacon state directly.
-   */
   private async resolveElBlockInfo(header: BlockHeaderResponse): Promise<{ blockHash: string; blockNumber: number }> {
     const { block, forkName } = await this.consensus.getBlockInfo(header.root);
 

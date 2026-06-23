@@ -117,14 +117,6 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return { block, forkName: forkName as SupportedFork };
   }
 
-  /**
-   * Returns EL block hash and number anchored to the given beacon state.
-   *
-   * Post-ePBS (GLOAS): execution_payload is absent from BeaconBlockBody.
-   * The state's latestExecutionPayloadHeader holds the last revealed EL block (slot N-1),
-   * which guarantees deposit symmetry. We read blockHash and blockNumber from there
-   * instead of from the block body.
-   */
   public async getStateElBlockInfo(stateId: StateId): Promise<BlockElInfo> {
     const state = await this.getState(stateId);
     const stateView = ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
