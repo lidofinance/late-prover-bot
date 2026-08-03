@@ -1,4 +1,5 @@
 import { ProverService } from './prover.service';
+import { RequestError } from '../providers/base/rest-provider';
 
 // Minimal prometheus mock covering every counter/timer used in processValidator
 const makePrometheusMock = () => ({
@@ -253,5 +254,66 @@ describe('ProverService.decodeValidatorsData', () => {
   it('returns empty array for empty data in any supported format', () => {
     expect(decode('0x', 1)).toEqual([]);
     expect(decode('0x', 2)).toEqual([]);
+  });
+});
+
+// ─── calcRootsTimestamp — EIP-4788 lookup key ─────────────────────────────────
+
+// Hoodi (chain 560048) constants, taken from the network that produced the RootNotFound() incident
+const HOODI_GENESIS = 1742213400;
+const SECONDS_PER_SLOT = 12;
+
+// Real Hoodi history around the failing proof: slot 3624534 was never proposed, so the block root
+// of slot 3624533 was stored by the block at slot 3624535 under its own timestamp.
+const PROVABLE_SLOT = 3624533;
+const MISSED_SLOT = 3624534;
+const NEXT_PROPOSED_SLOT = 3624535;
+
+const missedSlots = (missed: number[]) =>
+  jest.fn(async (blockId: string) => {
+    if (missed.includes(Number(blockId))) {
+      throw new RequestError(`NOT_FOUND: beacon block at slot ${blockId}`, 404);
+    }
+    return { header: { message: { slot: blockId } } };
+  });
+
+const makeHoodiService = (getBeaconHeader: jest.Mock) =>
+  makeService({
+    consensus: {
+      genesisTimestamp: HOODI_GENESIS,
+      beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT },
+      slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
+      getBeaconHeader,
+    },
+  });
+
+describe('ProverService.calcRootsTimestamp', () => {
+  it('skips a missed slot and keys on the next proposed slot (regression for RootNotFound)', async () => {
+    const service = makeHoodiService(missedSlots([MISSED_SLOT]));
+
+    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+
+    // Timestamp of slot 3624535 - the block that actually stored the slot-3624533 root.
+    // Verified on Hoodi: BEACON_ROOTS.get(1785707820) == 0x37350b7f...3702a00c
+    expect(rootsTimestamp).toBe(1785707820);
+    // The old `genesis + (slot + 1) * SECONDS_PER_SLOT` formula produced this, and the beacon roots
+    // predeploy reverts on it because no execution block carries a missed slot's timestamp.
+    expect(rootsTimestamp).not.toBe(1785707808);
+  });
+
+  it('keys on slot + 1 when that slot was proposed', async () => {
+    const service = makeHoodiService(missedSlots([]));
+
+    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+
+    expect(rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
+  });
+
+  it('skips a run of consecutive missed slots', async () => {
+    const service = makeHoodiService(missedSlots([MISSED_SLOT, NEXT_PROPOSED_SLOT, NEXT_PROPOSED_SLOT + 1]));
+
+    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+
+    expect(rootsTimestamp).toBe(HOODI_GENESIS + (NEXT_PROPOSED_SLOT + 2) * SECONDS_PER_SLOT);
   });
 });

@@ -596,7 +596,7 @@ export class ProverService implements OnModuleInit {
         stateRoot: finalizedBlockHeader.header.message.state_root,
         bodyRoot: finalizedBlockHeader.header.message.body_root,
       },
-      rootsTimestamp: this.calcRootsTimestamp(finalizedSlot),
+      rootsTimestamp: await this.calcRootsTimestamp(finalizedSlot),
     };
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
@@ -765,7 +765,7 @@ export class ProverService implements OnModuleInit {
         stateRoot: deadlineBlockHeader.header.message.state_root,
         bodyRoot: deadlineBlockHeader.header.message.body_root,
       },
-      rootsTimestamp: this.calcRootsTimestamp(actualSlot),
+      rootsTimestamp: await this.calcRootsTimestamp(actualSlot),
     };
 
     // Process all combined validators for this deadline slot
@@ -1376,12 +1376,18 @@ export class ProverService implements OnModuleInit {
     return slot % slotsPerHistoricalRoot;
   }
 
-  private calcRootsTimestamp(slot: number): number {
-    return (
-      this.consensus.genesisTimestamp +
-      Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
-      slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)
-    );
+  /**
+   * Timestamp under which the EIP-4788 beacon roots predeploy stores the block root of `slot`.
+   *
+   * The root of slot N is written by the next block that is *actually proposed*, keyed by that
+   * block's own timestamp. Assuming that block sits at slot N+1 is wrong: when N+1 is a missed
+   * slot no execution block carries its timestamp, the ring buffer holds no entry for it, and the
+   * verifier reverts with RootNotFound(). Scan forward for the first slot after `slot` that has a
+   * block instead - its parent is `slot`, so it is the block that stored the root.
+   */
+  private async calcRootsTimestamp(slot: number): Promise<number> {
+    const { slot: rootsSlot } = await this.findNextAvailableSlot(slot + 1);
+    return this.consensus.slotToTimestamp(rootsSlot);
   }
 
   /**
