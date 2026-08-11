@@ -10,7 +10,12 @@ import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
 import { ChainNotReadyError } from '../errors/chain-not-ready.error';
 import { EARLIEST_ANCHORABLE_SLOT, resolveElBlockNumber } from '../helpers/el-anchor';
-import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
+import {
+  generateBlockRootsProof,
+  generateHistoricalStateProof,
+  generateValidatorProof,
+  toHex,
+} from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
 import { Consensus } from '../providers/consensus/consensus';
@@ -25,6 +30,12 @@ interface ProvableAnchor {
   slot: number;
   header: BlockHeaderResponse;
   rootsTimestamp: number;
+}
+
+/** The block a set of validators is proven at. */
+interface TargetBlock {
+  slot: number;
+  header: BlockHeaderResponse;
 }
 
 /** EIP-4788 beacon roots predeploy */
@@ -810,21 +821,35 @@ export class ProverService implements OnModuleInit {
     // Get delivery timestamp from the first exit request
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
-    const anchor = await this.resolveProvableAnchor(deadlineSlot);
-    const actualSlot = anchor.slot;
-    const isOldSlot = await this.isSlotOld(actualSlot);
+    // The block the validators are proven at. It needs no beacon roots entry of its own: the
+    // verifier reaches it from the recent block's state, so the first proposed block at or after
+    // the deadline is always usable.
+    const { slot: actualSlot, header: targetHeader } = await this.consensus.findNextAvailableHeader(deadlineSlot);
+    const recentSlot = Number(provableFinalizedBlockHeader.header.slot);
+    const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
 
-    // Use the anchor slot - the slot the validator state is proven at - for the proof timestamp
+    if (actualSlot >= recentSlot) {
+      // The recent block's state only holds roots of blocks before it
+      this.loggerService.log(
+        `[Blocks ${fromBlock}-${toBlock}] Deadline slot ${deadlineSlot} resolved to slot ${actualSlot}, ` +
+          `which is not behind the anchor at slot ${recentSlot} yet - waiting for finalization to catch up`,
+      );
+      return { processedValidators: 0, skippedValidators: 0 };
+    }
+
+    // Same bound the verifier enforces on the block_roots ring buffer
+    const isOldSlot = recentSlot - actualSlot > slotsPerHistoricalRoot;
+
+    // Use the target slot - the slot the validator state is proven at - for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
     const provableDeadlineBlockHeader = {
       header: {
         slot: actualSlot,
-        proposerIndex: Number(anchor.header.header.message.proposer_index),
-        parentRoot: anchor.header.header.message.parent_root,
-        stateRoot: anchor.header.header.message.state_root,
-        bodyRoot: anchor.header.header.message.body_root,
+        proposerIndex: Number(targetHeader.header.message.proposer_index),
+        parentRoot: targetHeader.header.message.parent_root,
+        stateRoot: targetHeader.header.message.state_root,
+        bodyRoot: targetHeader.header.message.body_root,
       },
-      rootsTimestamp: anchor.rootsTimestamp,
     };
 
     // Process all combined validators for this deadline slot
@@ -843,7 +868,7 @@ export class ProverService implements OnModuleInit {
 
     if (isOldSlot) {
       await this.processHistoricalSlot(
-        anchor,
+        { slot: actualSlot, header: targetHeader },
         validatorWitnesses,
         exitRequest,
         finalizedStateView,
@@ -851,7 +876,21 @@ export class ProverService implements OnModuleInit {
         ssz,
       );
     } else {
-      await this.processCurrentSlot(validatorWitnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
+      // Prove the target block against the anchor state's block_roots ring buffer
+      const proof = generateBlockRootsProof(finalizedStateView, actualSlot % slotsPerHistoricalRoot);
+      const targetBlock = {
+        ...provableDeadlineBlockHeader,
+        proof: proof.witnesses.map((w) => ethers.utils.hexlify(w)),
+      };
+
+      await this.processCurrentSlot(
+        validatorWitnesses,
+        exitRequest,
+        provableFinalizedBlockHeader,
+        targetBlock,
+        fromBlock,
+        toBlock,
+      );
     }
 
     return { processedValidators, skippedValidators };
@@ -861,7 +900,7 @@ export class ProverService implements OnModuleInit {
    * Process historical slot verification
    */
   private async processHistoricalSlot(
-    anchor: ProvableAnchor,
+    anchor: TargetBlock,
     validatorWitnesses: any[],
     exitRequest: any,
     finalizedStateView: any,
@@ -990,7 +1029,8 @@ export class ProverService implements OnModuleInit {
   private async processCurrentSlot(
     validatorWitnesses: any[],
     exitRequest: any,
-    provableDeadlineBlockHeader: any,
+    provableRecentBlockHeader: any,
+    targetBlock: any,
     fromBlock: number,
     toBlock: number,
   ): Promise<void> {
@@ -1000,7 +1040,8 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing current slot in ${batches.length} batches:` +
         `\n  Total validators: ${validatorWitnesses.length}` +
-        `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+        `\n  Target block slot: ${targetBlock.header.slot}` +
+        `\n  Anchored on slot: ${provableRecentBlockHeader.header.slot}` +
         `\n  Batch size: ${this.validatorBatchSize}` +
         `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
     );
@@ -1012,7 +1053,7 @@ export class ProverService implements OnModuleInit {
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Processing batch ${i + 1}/${batches.length}:` +
           `\n  Validators in batch: ${batch.length}` +
-          `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}`,
+          `\n  Target block slot: ${targetBlock.header.slot}`,
       );
 
       try {
@@ -1021,19 +1062,25 @@ export class ProverService implements OnModuleInit {
         // Use execution service for transaction handling
         await this.execution.execute(
           // Emulation callback
-          async (beaconBlock, validatorWitnesses, exitRequestsData) => {
-            return await this.verifier.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequestsData);
+          async (recentBlock, target, validatorWitnesses, exitRequestsData) => {
+            return await this.verifier.verifyValidatorExitDelay(
+              recentBlock,
+              target,
+              validatorWitnesses,
+              exitRequestsData,
+            );
           },
           // Population callback
-          async (beaconBlock, validatorWitnesses, exitRequestsData) => {
+          async (recentBlock, target, validatorWitnesses, exitRequestsData) => {
             return await this.verifier.populateVerifyValidatorExitDelay(
-              beaconBlock,
+              recentBlock,
+              target,
               validatorWitnesses,
               exitRequestsData,
             );
           },
           // Payload
-          [provableDeadlineBlockHeader, batch, exitRequest.exitRequestsData],
+          [provableRecentBlockHeader, targetBlock, batch, exitRequest.exitRequestsData],
         );
 
         // Transaction successful - add all validator pubkeys to reported set
@@ -1054,7 +1101,7 @@ export class ProverService implements OnModuleInit {
         this.loggerService.error(
           `[Blocks ${fromBlock}-${toBlock}] ❌ Batch ${i + 1}/${batches.length} failed:` +
             `\n  Validators: ${batch.length}` +
-            `\n  Block slot: ${provableDeadlineBlockHeader.header.slot}` +
+            `\n  Target block slot: ${targetBlock.header.slot}` +
             `\n  Error: ${this.getErrorReference(error)}`,
         );
         throw error;
@@ -1449,9 +1496,7 @@ export class ProverService implements OnModuleInit {
    *
    * - the next slot was missed, so no execution block carries its timestamp. The next *proposed*
    *   block is the one that stored the root;
-   * - the entry has been evicted. The buffer holds HISTORY_BUFFER_LENGTH slots (~27 h), and
-   *   `isSlotOld` switches to the historical-summaries path one slot later, so a deadline can fall
-   *   into the gap between the two;
+   * - the entry has been evicted. The buffer holds HISTORY_BUFFER_LENGTH slots (~27 h);
    * - the execution block never existed even though the beacon block did. That cannot happen before
    *   Gloas, and from Gloas on it is what a withheld payload looks like.
    *
@@ -1459,9 +1504,10 @@ export class ProverService implements OnModuleInit {
    * only way forward is to anchor on the next block instead and ask again - that block's root is
    * written by a different, later execution block.
    *
-   * Moving the anchor forward is safe for an exit-delay proof: it proves the validator had still not
-   * exited at a later slot, which only increases the delay the verifier computes, and the validator
-   * state is read at that same later slot.
+   * Only the recent block a submission is anchored on goes through this. The block the validators are
+   * proven at does not: the verifier reaches it from the recent block's `state.block_roots`, so it
+   * needs no beacon roots entry of its own - which is what makes a deadline block whose successor
+   * withheld its payload provable at all.
    */
   private async resolveProvableAnchor(startSlot: number): Promise<ProvableAnchor> {
     let anchor = await this.consensus.findNextAvailableHeader(startSlot);

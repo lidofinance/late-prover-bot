@@ -2,7 +2,13 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ethers } from 'ethers';
 
 import { LidoLocatorContract } from './lido-locator.service';
-import { ExitRequestsData, HistoricalHeaderWitness, ProvableBeaconBlockHeader, ValidatorWitness } from './types';
+import {
+  BlockRootsHeaderWitness,
+  ExitRequestsData,
+  HistoricalHeaderWitness,
+  ProvableBeaconBlockHeader,
+  ValidatorWitness,
+} from './types';
 import { ConfigService } from '../config/config.service';
 import contractJson from '../contracts/abi/validator-exit-delay-verifier.json';
 import { Execution } from '../providers/execution/execution';
@@ -63,22 +69,35 @@ export class VerifierContract implements OnModuleInit {
     }
   }
 
+  /**
+   * @param recentBlock A block whose root the verifier reads from the EIP-4788 predeploy.
+   * @param targetBlock The block the validators are proven at, itself proven against
+   *   `recentBlock.header.stateRoot` through the state's `block_roots`.
+   */
   public async verifyValidatorExitDelay(
-    beaconBlock: ProvableBeaconBlockHeader,
+    recentBlock: ProvableBeaconBlockHeader,
+    targetBlock: BlockRootsHeaderWitness,
     validatorWitnesses: ValidatorWitness[],
     exitRequests: ExitRequestsData,
   ): Promise<any> {
     // Emulation call for the execution service
-    return await this.contract.callStatic.verifyValidatorExitDelay(beaconBlock, validatorWitnesses, exitRequests);
+    return await this.contract.callStatic.verifyValidatorExitDelay(
+      recentBlock,
+      targetBlock,
+      validatorWitnesses,
+      exitRequests,
+    );
   }
 
   public async populateVerifyValidatorExitDelay(
-    beaconBlock: ProvableBeaconBlockHeader,
+    recentBlock: ProvableBeaconBlockHeader,
+    targetBlock: BlockRootsHeaderWitness,
     validatorWitnesses: ValidatorWitness[],
     exitRequests: ExitRequestsData,
   ): Promise<ethers.PopulatedTransaction> {
     return await this.contract.populateTransaction.verifyValidatorExitDelay(
-      beaconBlock,
+      recentBlock,
+      targetBlock,
       validatorWitnesses,
       exitRequests,
     );

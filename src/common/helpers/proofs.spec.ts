@@ -1,4 +1,4 @@
-import { generateValidatorProof, toHex, verifyProof } from './proofs';
+import { generateBlockRootsProof, generateValidatorProof, toHex, verifyProof } from './proofs';
 
 // @lodestar/types is ESM-only, so it is loaded the same way the services load it
 const importSsz = async () => await eval(`import('@lodestar/types').then((m) => m.ssz)`);
@@ -82,6 +82,34 @@ describe('generateValidatorProof', () => {
         state.validators.get(3).hashTreeRoot(),
       ),
     ).toThrow('Proof is not valid');
+  });
+});
+
+describe('generateBlockRootsProof', () => {
+  let ssz: any;
+
+  beforeAll(async () => {
+    ssz = await importSsz();
+  });
+
+  // This is how the deadline block reaches the verifier: proven against a recent state's block_roots
+  // ring buffer instead of the EIP-4788 predeploy.
+  it.each(['electra', 'gloas'])('proves a block root out of the %s state ring buffer', (fork) => {
+    const state = ssz[fork].BeaconState.defaultViewDU();
+    const rootIndex = 5983;
+    state.blockRoots.set(rootIndex, new Uint8Array(32).fill(7));
+    state.commit();
+
+    const proof = generateBlockRootsProof(state, rootIndex);
+
+    expect(() =>
+      verifyProof(
+        state.hashTreeRoot(),
+        state.type.getPathInfo(['blockRoots', rootIndex]).gindex,
+        proof.witnesses,
+        state.blockRoots.get(rootIndex),
+      ),
+    ).not.toThrow();
   });
 });
 

@@ -1,641 +1,731 @@
 [
-    {
-        "inputs": [
-            {
-                "internalType": "address",
-                "name": "lidoLocator",
-                "type": "address"
-            },
-            {
-                "components": [
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstValidatorPrev",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstValidatorCurr",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstHistoricalSummaryPrev",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstHistoricalSummaryCurr",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstBlockRootInSummaryPrev",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "GIndex",
-                        "name": "gIFirstBlockRootInSummaryCurr",
-                        "type": "bytes32"
-                    }
-                ],
-                "internalType": "struct GIndices",
-                "name": "gIndices",
-                "type": "tuple"
-            },
-            {
-                "internalType": "uint64",
-                "name": "firstSupportedSlot",
-                "type": "uint64"
-            },
-            {
-                "internalType": "uint64",
-                "name": "pivotSlot",
-                "type": "uint64"
-            },
-            {
-                "internalType": "uint64",
-                "name": "capellaSlot",
-                "type": "uint64"
-            },
-            {
-                "internalType": "uint64",
-                "name": "slotsPerHistoricalRoot",
-                "type": "uint64"
-            },
-            {
-                "internalType": "uint32",
-                "name": "slotsPerEpoch",
-                "type": "uint32"
-            },
-            {
-                "internalType": "uint32",
-                "name": "secondsPerSlot",
-                "type": "uint32"
-            },
-            {
-                "internalType": "uint64",
-                "name": "genesisTime",
-                "type": "uint64"
-            },
-            {
-                "internalType": "uint32",
-                "name": "shardCommitteePeriodInSeconds",
-                "type": "uint32"
-            }
-        ],
-        "stateMutability": "nonpayable",
-        "type": "constructor"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "provableBeaconBlockTimestamp",
-                "type": "uint256"
-            },
-            {
-                "internalType": "uint256",
-                "name": "eligibleExitRequestTimestamp",
-                "type": "uint256"
-            }
-        ],
-        "name": "ExitIsNotEligibleOnProvableBeaconBlock",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "IndexOutOfRange",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "InvalidBlockHeader",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "InvalidCapellaSlot",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "InvalidGIndex",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "InvalidPerHistoricalRootSlot",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "InvalidPivotSlot",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "RootNotFound",
-        "type": "error"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint64",
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "lidoLocator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "gIndices",
+        "type": "tuple",
+        "internalType": "struct GIndices",
+        "components": [
+          {
+            "name": "gIFirstValidatorPreGloas",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIValidators",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIFirstHistoricalSummaryPrev",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIFirstHistoricalSummaryCurr",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIFirstBlockRootInSummaryPrev",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIFirstBlockRootInSummaryCurr",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIBlockRootsPreGloas",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          },
+          {
+            "name": "gIBlockRoots",
+            "type": "bytes32",
+            "internalType": "GIndex"
+          }
+        ]
+      },
+      {
+        "name": "firstSupportedSlot",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "pivotSlot",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "capellaSlot",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "slotsPerHistoricalRoot",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "slotsPerEpoch",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "secondsPerSlot",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "genesisTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "shardCommitteePeriodInSeconds",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "BEACON_ROOTS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "CAPELLA_SLOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FIRST_SUPPORTED_SLOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GENESIS_TIME",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_BLOCK_ROOTS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_BLOCK_ROOTS_PRE_GLOAS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_FIRST_BLOCK_ROOT_IN_SUMMARY_CURR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_FIRST_BLOCK_ROOT_IN_SUMMARY_PREV",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_FIRST_HISTORICAL_SUMMARY_CURR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_FIRST_HISTORICAL_SUMMARY_PREV",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_FIRST_VALIDATOR_PRE_GLOAS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GI_VALIDATORS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "GIndex"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "LOCATOR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract ILidoLocator"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "PIVOT_SLOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SECONDS_PER_SLOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SHARD_COMMITTEE_PERIOD_IN_SECONDS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SLOTS_PER_EPOCH",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SLOTS_PER_HISTORICAL_ROOT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "verifyHistoricalValidatorExitDelay",
+    "inputs": [
+      {
+        "name": "beaconBlock",
+        "type": "tuple",
+        "internalType": "struct ProvableBeaconBlockHeader",
+        "components": [
+          {
+            "name": "header",
+            "type": "tuple",
+            "internalType": "struct BeaconBlockHeader",
+            "components": [
+              {
                 "name": "slot",
-                "type": "uint64"
-            }
-        ],
-        "name": "UnsupportedSlot",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "ZeroLidoLocatorAddress",
-        "type": "error"
-    },
-    {
-        "inputs": [],
-        "name": "BEACON_ROOTS",
-        "outputs": [
-            {
-                "internalType": "address",
-                "name": "",
-                "type": "address"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "CAPELLA_SLOT",
-        "outputs": [
-            {
-                "internalType": "uint64",
-                "name": "",
-                "type": "uint64"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "FIRST_SUPPORTED_SLOT",
-        "outputs": [
-            {
-                "internalType": "uint64",
-                "name": "",
-                "type": "uint64"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GENESIS_TIME",
-        "outputs": [
-            {
-                "internalType": "uint64",
-                "name": "",
-                "type": "uint64"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_BLOCK_ROOT_IN_SUMMARY_CURR",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_BLOCK_ROOT_IN_SUMMARY_PREV",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_HISTORICAL_SUMMARY_CURR",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_HISTORICAL_SUMMARY_PREV",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_VALIDATOR_CURR",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "GI_FIRST_VALIDATOR_PREV",
-        "outputs": [
-            {
-                "internalType": "GIndex",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "LOCATOR",
-        "outputs": [
-            {
-                "internalType": "contract ILidoLocator",
-                "name": "",
-                "type": "address"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "PIVOT_SLOT",
-        "outputs": [
-            {
-                "internalType": "uint64",
-                "name": "",
-                "type": "uint64"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "SECONDS_PER_SLOT",
-        "outputs": [
-            {
-                "internalType": "uint32",
-                "name": "",
-                "type": "uint32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "SHARD_COMMITTEE_PERIOD_IN_SECONDS",
-        "outputs": [
-            {
-                "internalType": "uint32",
-                "name": "",
-                "type": "uint32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "SLOTS_PER_EPOCH",
-        "outputs": [
-            {
-                "internalType": "uint32",
-                "name": "",
-                "type": "uint32"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "SLOTS_PER_HISTORICAL_ROOT",
-        "outputs": [
-            {
-                "internalType": "uint64",
-                "name": "",
-                "type": "uint64"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "components": [
-                    {
-                        "components": [
-                            {
-                                "internalType": "uint64",
-                                "name": "slot",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "uint64",
-                                "name": "proposerIndex",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "parentRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "stateRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "bodyRoot",
-                                "type": "bytes32"
-                            }
-                        ],
-                        "internalType": "struct BeaconBlockHeader",
-                        "name": "header",
-                        "type": "tuple"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "rootsTimestamp",
-                        "type": "uint64"
-                    }
-                ],
-                "internalType": "struct ProvableBeaconBlockHeader",
-                "name": "beaconBlock",
-                "type": "tuple"
-            },
-            {
-                "components": [
-                    {
-                        "components": [
-                            {
-                                "internalType": "uint64",
-                                "name": "slot",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "uint64",
-                                "name": "proposerIndex",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "parentRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "stateRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "bodyRoot",
-                                "type": "bytes32"
-                            }
-                        ],
-                        "internalType": "struct BeaconBlockHeader",
-                        "name": "header",
-                        "type": "tuple"
-                    },
-                    {
-                        "internalType": "bytes32[]",
-                        "name": "proof",
-                        "type": "bytes32[]"
-                    }
-                ],
-                "internalType": "struct HistoricalHeaderWitness",
-                "name": "oldBlock",
-                "type": "tuple"
-            },
-            {
-                "components": [
-                    {
-                        "internalType": "uint32",
-                        "name": "exitRequestIndex",
-                        "type": "uint32"
-                    },
-                    {
-                        "internalType": "bytes32",
-                        "name": "withdrawalCredentials",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "effectiveBalance",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "bool",
-                        "name": "slashed",
-                        "type": "bool"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "activationEligibilityEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "activationEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "withdrawableEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "bytes32[]",
-                        "name": "validatorProof",
-                        "type": "bytes32[]"
-                    }
-                ],
-                "internalType": "struct ValidatorWitness[]",
-                "name": "validatorWitnesses",
-                "type": "tuple[]"
-            },
-            {
-                "components": [
-                    {
-                        "internalType": "bytes",
-                        "name": "data",
-                        "type": "bytes"
-                    },
-                    {
-                        "internalType": "uint256",
-                        "name": "dataFormat",
-                        "type": "uint256"
-                    }
-                ],
-                "internalType": "struct ExitRequestData",
-                "name": "exitRequests",
-                "type": "tuple"
-            }
-        ],
-        "name": "verifyHistoricalValidatorExitDelay",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "components": [
-                    {
-                        "components": [
-                            {
-                                "internalType": "uint64",
-                                "name": "slot",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "uint64",
-                                "name": "proposerIndex",
-                                "type": "uint64"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "parentRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "stateRoot",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "bodyRoot",
-                                "type": "bytes32"
-                            }
-                        ],
-                        "internalType": "struct BeaconBlockHeader",
-                        "name": "header",
-                        "type": "tuple"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "rootsTimestamp",
-                        "type": "uint64"
-                    }
-                ],
-                "internalType": "struct ProvableBeaconBlockHeader",
-                "name": "beaconBlock",
-                "type": "tuple"
-            },
-            {
-                "components": [
-                    {
-                        "internalType": "uint32",
-                        "name": "exitRequestIndex",
-                        "type": "uint32"
-                    },
-                    {
-                        "internalType": "bytes32",
-                        "name": "withdrawalCredentials",
-                        "type": "bytes32"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "effectiveBalance",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "bool",
-                        "name": "slashed",
-                        "type": "bool"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "activationEligibilityEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "activationEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "uint64",
-                        "name": "withdrawableEpoch",
-                        "type": "uint64"
-                    },
-                    {
-                        "internalType": "bytes32[]",
-                        "name": "validatorProof",
-                        "type": "bytes32[]"
-                    }
-                ],
-                "internalType": "struct ValidatorWitness[]",
-                "name": "validatorWitnesses",
-                "type": "tuple[]"
-            },
-            {
-                "components": [
-                    {
-                        "internalType": "bytes",
-                        "name": "data",
-                        "type": "bytes"
-                    },
-                    {
-                        "internalType": "uint256",
-                        "name": "dataFormat",
-                        "type": "uint256"
-                    }
-                ],
-                "internalType": "struct ExitRequestData",
-                "name": "exitRequests",
-                "type": "tuple"
-            }
-        ],
-        "name": "verifyValidatorExitDelay",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    }
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "proposerIndex",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "parentRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "stateRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bodyRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              }
+            ]
+          },
+          {
+            "name": "rootsTimestamp",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      },
+      {
+        "name": "oldBlock",
+        "type": "tuple",
+        "internalType": "struct HistoricalHeaderWitness",
+        "components": [
+          {
+            "name": "header",
+            "type": "tuple",
+            "internalType": "struct BeaconBlockHeader",
+            "components": [
+              {
+                "name": "slot",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "proposerIndex",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "parentRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "stateRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bodyRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              }
+            ]
+          },
+          {
+            "name": "proof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      },
+      {
+        "name": "validatorWitnesses",
+        "type": "tuple[]",
+        "internalType": "struct ValidatorWitness[]",
+        "components": [
+          {
+            "name": "exitRequestIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "withdrawalCredentials",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "effectiveBalance",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "slashed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "activationEligibilityEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "activationEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "withdrawableEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "validatorProof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      },
+      {
+        "name": "exitRequests",
+        "type": "tuple",
+        "internalType": "struct ExitRequestData",
+        "components": [
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "dataFormat",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "verifyValidatorExitDelay",
+    "inputs": [
+      {
+        "name": "recentBlock",
+        "type": "tuple",
+        "internalType": "struct ProvableBeaconBlockHeader",
+        "components": [
+          {
+            "name": "header",
+            "type": "tuple",
+            "internalType": "struct BeaconBlockHeader",
+            "components": [
+              {
+                "name": "slot",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "proposerIndex",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "parentRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "stateRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bodyRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              }
+            ]
+          },
+          {
+            "name": "rootsTimestamp",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      },
+      {
+        "name": "targetBlock",
+        "type": "tuple",
+        "internalType": "struct BlockRootsHeaderWitness",
+        "components": [
+          {
+            "name": "header",
+            "type": "tuple",
+            "internalType": "struct BeaconBlockHeader",
+            "components": [
+              {
+                "name": "slot",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "proposerIndex",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "parentRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "stateRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bodyRoot",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              }
+            ]
+          },
+          {
+            "name": "proof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      },
+      {
+        "name": "validatorWitnesses",
+        "type": "tuple[]",
+        "internalType": "struct ValidatorWitness[]",
+        "components": [
+          {
+            "name": "exitRequestIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "withdrawalCredentials",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "effectiveBalance",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "slashed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "activationEligibilityEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "activationEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "withdrawableEpoch",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "validatorProof",
+            "type": "bytes32[]",
+            "internalType": "bytes32[]"
+          }
+        ]
+      },
+      {
+        "name": "exitRequests",
+        "type": "tuple",
+        "internalType": "struct ExitRequestData",
+        "components": [
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "dataFormat",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "error",
+    "name": "BlockRootNotInRange",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExitIsNotEligibleOnProvableBeaconBlock",
+    "inputs": [
+      {
+        "name": "provableBeaconBlockTimestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "eligibleExitRequestTimestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "HistoricalSummaryDoesNotExist",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "IndexOutOfRange",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidBlockHeader",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidCapellaSlot",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidGIndex",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidPerHistoricalRootSlot",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidPivotSlot",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RootNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnsupportedSlot",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroLidoLocatorAddress",
+    "inputs": []
+  }
 ]
