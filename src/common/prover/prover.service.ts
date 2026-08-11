@@ -13,7 +13,24 @@ import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
 import { RequestError } from '../providers/base/rest-provider';
 import { Consensus } from '../providers/consensus/consensus';
+import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 import { Execution } from '../providers/execution/execution';
+
+/**
+ * A beacon block a proof can be anchored on, and the timestamp the EIP-4788 ring buffer holds its
+ * root under.
+ */
+interface ProvableAnchor {
+  slot: number;
+  header: BlockHeaderResponse;
+  rootsTimestamp: number;
+}
+
+/** EIP-4788 beacon roots predeploy */
+const BEACON_ROOTS_ADDRESS = '0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02';
+
+/** How many times {@link ProverService.resolveProvableAnchor} may move the anchor forward. */
+const MAX_ANCHOR_ADVANCES = 8;
 
 @Injectable()
 export class ProverService implements OnModuleInit {
@@ -583,20 +600,36 @@ export class ProverService implements OnModuleInit {
     provableFinalizedBlockHeader: any;
     ssz: any;
   } | null> {
-    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
-    const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
-    const finalizedSlot = Number(finalizedBlockHeader.header.message.slot);
+
+    // Anchor on the finalized block's parent, so the block that stored its root - the writer - is the
+    // finalized block itself. Anchoring on the finalized block would make the writer its child, which
+    // is not finalized: a reorg there changes which execution block holds the timestamp and the
+    // submission reverts. Both blocks are finalized this way, and the anchor being one slot older
+    // costs nothing - its state is read for the historical summaries, which only grow.
+    const parentHeader = await this.consensus.getBeaconHeader(finalizedBlockHeader.header.message.parent_root);
+    const anchor = await this.resolveProvableAnchor(Number(parentHeader.header.message.slot));
+
+    if (anchor.slot !== Number(parentHeader.header.message.slot)) {
+      this.loggerService.warn(
+        `[Blocks ${fromBlock}-${toBlock}] Anchoring on slot ${anchor.slot} instead of slot ` +
+          `${parentHeader.header.message.slot}: the beacon roots contract holds no entry for it. ` +
+          `The anchor may not be finalized, a reorg would make its proofs revert.`,
+      );
+    }
+
+    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching beacon state at slot ${anchor.slot}`);
+    const state = await this.consensus.getState(anchor.slot);
 
     const provableFinalizedBlockHeader = {
       header: {
-        slot: finalizedSlot,
-        proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
-        parentRoot: finalizedBlockHeader.header.message.parent_root,
-        stateRoot: finalizedBlockHeader.header.message.state_root,
-        bodyRoot: finalizedBlockHeader.header.message.body_root,
+        slot: anchor.slot,
+        proposerIndex: Number(anchor.header.header.message.proposer_index),
+        parentRoot: anchor.header.header.message.parent_root,
+        stateRoot: anchor.header.header.message.state_root,
+        bodyRoot: anchor.header.header.message.body_root,
       },
-      rootsTimestamp: await this.calcRootsTimestamp(finalizedSlot),
+      rootsTimestamp: anchor.rootsTimestamp,
     };
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
@@ -751,21 +784,21 @@ export class ProverService implements OnModuleInit {
     // Get delivery timestamp from the first exit request
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
-    const isOldSlot = await this.isSlotOld(deadlineSlot);
+    const anchor = await this.resolveProvableAnchor(deadlineSlot);
+    const actualSlot = anchor.slot;
+    const isOldSlot = await this.isSlotOld(actualSlot);
 
-    const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-
-    // Use the actual slot that has a block for proof timestamp
+    // Use the anchor slot - the slot the validator state is proven at - for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
     const provableDeadlineBlockHeader = {
       header: {
-        slot: Number(deadlineBlockHeader.header.message.slot),
-        proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-        parentRoot: deadlineBlockHeader.header.message.parent_root,
-        stateRoot: deadlineBlockHeader.header.message.state_root,
-        bodyRoot: deadlineBlockHeader.header.message.body_root,
+        slot: actualSlot,
+        proposerIndex: Number(anchor.header.header.message.proposer_index),
+        parentRoot: anchor.header.header.message.parent_root,
+        stateRoot: anchor.header.header.message.state_root,
+        bodyRoot: anchor.header.header.message.body_root,
       },
-      rootsTimestamp: await this.calcRootsTimestamp(actualSlot),
+      rootsTimestamp: anchor.rootsTimestamp,
     };
 
     // Process all combined validators for this deadline slot
@@ -784,7 +817,7 @@ export class ProverService implements OnModuleInit {
 
     if (isOldSlot) {
       await this.processHistoricalSlot(
-        deadlineSlot,
+        anchor,
         validatorWitnesses,
         exitRequest,
         finalizedStateView,
@@ -802,7 +835,7 @@ export class ProverService implements OnModuleInit {
    * Process historical slot verification
    */
   private async processHistoricalSlot(
-    deadlineSlot: number,
+    anchor: ProvableAnchor,
     validatorWitnesses: any[],
     exitRequest: any,
     finalizedStateView: any,
@@ -811,9 +844,12 @@ export class ProverService implements OnModuleInit {
   ): Promise<void> {
     // Split into batches to avoid oversized transactions
     const batches = this.createValidatorBatches(validatorWitnesses);
+    // The block the witnesses were built from - the same one the summary proof has to point at
+    const actualSlot = anchor.slot;
+    const deadlineBlockHeader = anchor.header;
 
     this.loggerService.log(
-      `Processing historical slot ${deadlineSlot} in ${batches.length} batches:` +
+      `Processing historical slot ${actualSlot} in ${batches.length} batches:` +
         `\n  Total validators: ${validatorWitnesses.length}` +
         `\n  Batch size: ${this.validatorBatchSize}` +
         `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
@@ -823,12 +859,9 @@ export class ProverService implements OnModuleInit {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
-      const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-
       this.loggerService.log(
         `Processing historical batch ${i + 1}/${batches.length}:` +
-          `\n  Requested deadline slot: ${deadlineSlot}` +
-          `\n  Actual available slot: ${actualSlot}` +
+          `\n  Anchor slot: ${actualSlot}` +
           `\n  Validators in batch: ${batch.length}`,
       );
 
@@ -906,7 +939,7 @@ export class ProverService implements OnModuleInit {
 
         this.loggerService.log(
           `✅ Historical batch ${i + 1}/${batches.length} completed:` +
-            `\n  Slot: ${deadlineSlot}` +
+            `\n  Slot: ${actualSlot}` +
             `\n  Validators: ${batch.length}` +
             `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Processing time: ${Date.now() - batchStartTime}ms`,
@@ -916,7 +949,7 @@ export class ProverService implements OnModuleInit {
         // Just log a brief reference for this batch context
         this.loggerService.error(
           `❌ Historical batch ${i + 1}/${batches.length} failed:` +
-            `\n  Slot: ${deadlineSlot}` +
+            `\n  Slot: ${actualSlot}` +
             `\n  Validators: ${batch.length}` +
             `\n  Error: ${this.getErrorReference(error)}`,
         );
@@ -1377,17 +1410,76 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * Timestamp under which the EIP-4788 beacon roots predeploy stores the block root of `slot`.
+   * The block a proof for `startSlot` is anchored on, and the timestamp under which the EIP-4788
+   * beacon roots predeploy holds that block's root - confirmed against the predeploy itself.
    *
-   * The root of slot N is written by the next block that is *actually proposed*, keyed by that
-   * block's own timestamp. Assuming that block sits at slot N+1 is wrong: when N+1 is a missed
-   * slot no execution block carries its timestamp, the ring buffer holds no entry for it, and the
-   * verifier reverts with RootNotFound(). Scan forward for the first slot after `slot` that has a
-   * block instead - its parent is `slot`, so it is the block that stored the root.
+   * The root of a block is never stored by that block. It is stored by the execution block of the
+   * *next proposed* beacon block, as its `parent_beacon_block_root`, keyed by that execution block's
+   * own timestamp. So the timestamp to pass the verifier belongs to the next block, not to the block
+   * being proven.
+   *
+   * Several things leave the ring buffer without a usable entry, and every one of them ends in the
+   * verifier reverting with RootNotFound():
+   *
+   * - the next slot was missed, so no execution block carries its timestamp. The next *proposed*
+   *   block is the one that stored the root;
+   * - the entry has been evicted. The buffer holds HISTORY_BUFFER_LENGTH slots (~27 h), and
+   *   `isSlotOld` switches to the historical-summaries path one slot later, so a deadline can fall
+   *   into the gap between the two;
+   * - the execution block never existed even though the beacon block did. That cannot happen before
+   *   Gloas, and from Gloas on it is what a withheld payload looks like.
+   *
+   * Rather than infer which of these happened, ask the predeploy. When it does not hold the root, the
+   * only way forward is to anchor on the next block instead and ask again - that block's root is
+   * written by a different, later execution block.
+   *
+   * Moving the anchor forward is safe for an exit-delay proof: it proves the validator had still not
+   * exited at a later slot, which only increases the delay the verifier computes, and the validator
+   * state is read at that same later slot.
    */
-  private async calcRootsTimestamp(slot: number): Promise<number> {
-    const { slot: rootsSlot } = await this.findNextAvailableSlot(slot + 1);
-    return this.consensus.slotToTimestamp(rootsSlot);
+  private async resolveProvableAnchor(startSlot: number): Promise<ProvableAnchor> {
+    let anchor = await this.findNextAvailableSlot(startSlot);
+
+    for (let attempt = 0; attempt < MAX_ANCHOR_ADVANCES; attempt++) {
+      const writer = await this.findNextAvailableSlot(anchor.slot + 1);
+      const rootsTimestamp = this.consensus.slotToTimestamp(writer.slot);
+      const storedRoot = await this.getBeaconBlockRoot(rootsTimestamp);
+
+      if (storedRoot === anchor.header.root) {
+        return { slot: anchor.slot, header: anchor.header, rootsTimestamp };
+      }
+
+      this.loggerService.log(
+        `Beacon roots contract holds ${storedRoot ?? 'nothing'} at ${rootsTimestamp}, not the root of slot ` +
+          `${anchor.slot}:` +
+          `\n  Moving the proof anchor from slot ${anchor.slot} to slot ${writer.slot}`,
+      );
+      anchor = writer;
+    }
+
+    throw new Error(
+      `Failed to find a provable anchor within ${MAX_ANCHOR_ADVANCES} blocks after slot ${startSlot}: ` +
+        `the beacon roots contract held none of their roots`,
+    );
+  }
+
+  /**
+   * The block root the EIP-4788 predeploy holds for a timestamp, or null when it holds none.
+   *
+   * This is the same call the verifier makes, so its answer is exactly what the submission will see.
+   */
+  private async getBeaconBlockRoot(timestamp: number): Promise<string | null> {
+    try {
+      const root = await this.execution.provider.call({
+        to: BEACON_ROOTS_ADDRESS,
+        data: ethers.utils.hexZeroPad(ethers.BigNumber.from(timestamp).toHexString(), 32),
+      });
+      // The predeploy returns empty data for a timestamp it has no entry for
+      return root && root !== '0x' ? root : null;
+    } catch {
+      // Reverts for a timestamp outside the ring buffer
+      return null;
+    }
   }
 
   /**
