@@ -271,6 +271,11 @@ const NEXT_PROPOSED_SLOT = 3624535;
 
 const rootOf = (slot: number) => `0xroot${slot}`;
 
+const makeHeader = (slot: number) => ({
+  root: rootOf(slot),
+  header: { message: { slot: slot.toString(), proposer_index: '1', parent_root: rootOf(slot - 1) } },
+});
+
 /**
  * Chain stub. `missed` slots have no block; `unstored` slots produce no beacon roots entry - a
  * missed execution block before Gloas, a withheld payload after it. Everything else is answered by
@@ -283,6 +288,13 @@ const makeAnchorService = ({ missed = [] as number[], unstored = [] as number[] 
       throw new RequestError(`NOT_FOUND: beacon block at slot ${slot}`, 404);
     }
     return { root: rootOf(slot), header: { message: { slot: blockId } } };
+  });
+
+  // The forward scan lives on the consensus provider; this is the same 404-skipping behaviour
+  const findNextAvailableHeader = jest.fn(async (startSlot: number) => {
+    let slot = startSlot;
+    while (missed.includes(slot)) slot++;
+    return { slot, header: await getBeaconHeader(slot.toString()) };
   });
 
   // The execution block of slot W stores the root of W's parent under ts(W)
@@ -301,6 +313,7 @@ const makeAnchorService = ({ missed = [] as number[], unstored = [] as number[] 
       beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT },
       slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
       getBeaconHeader,
+      findNextAvailableHeader,
     },
     execution: { provider: { call } },
   });
