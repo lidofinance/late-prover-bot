@@ -53,6 +53,20 @@ Two things leave the ring buffer without an entry, and both revert with `RootNot
 
 Whether the payload of a block was revealed is decided from the next block's bid: it must commit to
 `state.latest_block_hash`, which equals this block's payload hash only if the payload was applied.
+That is the spec's own test, without the state - `process_parent_execution_payload` compares the
+child's `bid.parent_block_hash` against `state.latest_execution_payload_bid.block_hash`, which is
+where the parent's bid was recorded when the parent was processed.
+
+Two things that do *not* create a missing bid, and so need no special case here:
+
+- **A self-built block.** A proposer building without a builder still submits a bid, with
+  `builder_index = BUILDER_INDEX_SELF_BUILD` (`UINT64_MAX`), `value = 0` and the signature set to the
+  G2 point at infinity; `parent_block_hash` and `block_hash` are real. Every proposer on the devnet
+  self-builds, which is exactly the shape the code was exercised against.
+- **An "empty" parent.** In the spec that word describes a parent whose *payload* was withheld, not a
+  block without a bid. `signed_execution_payload_bid` is a plain member of `BeaconBlockBody`, and a
+  zeroed bid cannot pass `bid.parent_block_hash == state.latest_block_hash`, so every valid post-fork
+  block carries a bid with the real hash.
 
 This applies to the **recent** block a submission is anchored on — the finalized block whose state
 also carries the `block_roots` ring and the historical summaries. Moving that anchor forward is
