@@ -50,16 +50,23 @@ describe('generateValidatorProof', () => {
     ).not.toThrow();
   });
 
-  // The verifier contract hardcodes the generalized index of the validator registry and only
-  // switches it at a configured PIVOT_SLOT. Gloas adds fields to the state but keeps `validators`
-  // at the same position and the container within 64 fields, so the index is unchanged and no new
-  // pivot is needed for EIP-7732.
-  it('keeps the validators generalized index unchanged from Electra through Gloas', () => {
-    const gindexOf = (fork: string) =>
-      ssz[fork].BeaconState.defaultViewDU().type.getPathInfo(['validators', 1039010]).gindex;
+  // Gloas turns the state into a progressive container and `validators` into a progressive list
+  // (EIP-7916), which re-merkleizes the registry. `ValidatorExitDelayVerifier` derives the leaf
+  // index as GI_FIRST_VALIDATOR + validatorIndex and only switches GI_FIRST_VALIDATOR at a
+  // configured PIVOT_SLOT; neither the constant nor the arithmetic survives the fork, so the
+  // contract needs work before proofs can be submitted post-Gloas. This test pins that fact.
+  it('changes the validator generalized index in Gloas, and it is no longer linear in the index', () => {
+    const gindexOf = (fork: string, index: number) => ssz[fork].BeaconState.getPathInfo(['validators', index]).gindex;
 
-    expect(gindexOf('gloas')).toBe(gindexOf('fulu'));
-    expect(gindexOf('gloas')).toBe(gindexOf('electra'));
+    expect(gindexOf('gloas', 0).toString()).not.toBe(gindexOf('fulu', 0).toString());
+
+    // Pre-Gloas the registry is a fixed-depth list: consecutive validators are consecutive leaves
+    expect((gindexOf('fulu', 1) - gindexOf('fulu', 0)).toString()).toBe('1');
+    expect((gindexOf('fulu', 1039010) - gindexOf('fulu', 0)).toString()).toBe('1039010');
+
+    // Progressive lists grow in subtrees, so the offset from the first validator is not the index
+    expect((gindexOf('gloas', 1) - gindexOf('gloas', 0)).toString()).not.toBe('1');
+    expect((gindexOf('gloas', 1039010) - gindexOf('gloas', 0)).toString()).not.toBe('1039010');
   });
 
   it('produces a proof that does not verify against a different validator leaf', () => {

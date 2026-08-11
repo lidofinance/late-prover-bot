@@ -66,14 +66,51 @@ state is read at that same later slot.
   particular the proof anchor is **not** shifted to the child block the way `lido-oracle` shifts its
   reference blockstamp — the oracle does that because it needs EL-derived data (block hash, deposits,
   withdrawals) to be settled, while this bot only needs the validator registry.
-- **Proof shape.** Gloas adds fields to `BeaconState` but keeps `validators` at the same position
-  and the container within 64 fields, so the generalized index the verifier hardcodes is unchanged
-  and no new `PIVOT_SLOT` is needed (covered by `proofs.spec.ts`).
+- ## Open blocker: the verifier contract cannot verify Gloas proofs yet
+
+Glamsterdam also brings **EIP-7916 progressive SSZ lists**. In the current spec `BeaconState` is a
+`ProgressiveContainer` and `Validators` is a `ProgressiveList`, which re-merkleizes the registry:
+
+| | `validators[0]` gindex | `validators[n] - validators[0]` |
+|---|---|---|
+| Electra / Fulu | `164926744166400` | `n` |
+| Gloas | `1432` | not `n` (grows in subtrees) |
+
+`ValidatorExitDelayVerifier` derives the leaf as `GI_FIRST_VALIDATOR + validatorIndex` and only
+switches `GI_FIRST_VALIDATOR` at a configured `PIVOT_SLOT`. Post-Gloas neither the constant nor the
+arithmetic holds, and the same applies to the historical-summaries index used by
+`verifyHistoricalValidatorExitDelay`. The bot side is fine — it asks SSZ for the gindex and produces
+a valid proof for the new tree — but the contract needs a change before those proofs can be
+submitted. Pinned by `proofs.spec.ts`.
 
 ## Dependency
 
-Gloas containers require `@lodestar/types` ≥ 1.45.0; earlier versions alias `ssz.gloas` to the Fulu
-types, which would silently decode post-fork blocks and states with the wrong layout.
+`@lodestar/types` is pinned to **1.46.0-rc.1**, the first version whose Gloas containers hash the
+same way the devnet clients do:
+
+- 1.34.x aliases `ssz.gloas` to the Fulu containers, so post-fork blocks and states decode with the
+  wrong layout, silently.
+- 1.45.0 (current `latest`) predates EIP-7916. It serializes a Gloas state byte-identically to what
+  the node serves, but hashes it to a different root, so every proof built from it would be rejected.
+  This is easy to miss precisely because deserialization succeeds.
+
+Move to 1.46.0 final once it is released. Whenever the Gloas spec moves, re-run the devnet check
+below rather than trusting a green unit suite.
+
+## Devnet check
+
+`scripts/devnet-gloas-check.ts` runs the real provider and the real anchor resolution against a
+Gloas node and validates every conclusion against the chain (EIP-4788 buffer contents, EL block
+existence, state root vs the block header):
+
+```bash
+CL_API_URLS=<cl> EL_API_URL=<el> npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
+```
+
+Last run against `glamsterdam-kurtosis-7` (Lighthouse v8.2.0 / Besu, `GLOAS_FORK_EPOCH=3`): all
+checks pass. Over 1197 slots that devnet had 397 missed slots and **no withheld payloads** — every
+proposer self-builds — so the missed-slot path is exercised against real data while the
+withheld-payload path is covered by unit tests only.
 
 ## Known gap (pre-existing)
 
