@@ -8,6 +8,7 @@ import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
+import { resolveElBlockNumber } from '../helpers/el-anchor';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
@@ -88,18 +89,14 @@ export class ProverService implements OnModuleInit {
 
       // Calculate block range for configured lookback period
       const currentBlock = await this.execution.provider.getBlockNumber();
-      const SECONDS_PER_DAY = 24 * 60 * 60;
-      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS');
-      const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
-
-      const blocksToLookBack = Math.floor((daysToLookBack * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
-      const fromBlock = Math.max(1, currentBlock - blocksToLookBack);
+      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS') as number;
+      const fromBlock = await this.resolveLookbackFromBlock(daysToLookBack, currentBlock);
 
       this.loggerService.log(
         `Scanning for exit requests in recent blocks:` +
           `\n  Current block: ${currentBlock}` +
           `\n  From block: ${fromBlock}` +
-          `\n  Block range: ${blocksToLookBack} blocks (${daysToLookBack} days)`,
+          `\n  Block range: ${currentBlock - fromBlock} blocks (${daysToLookBack} days)`,
       );
 
       // Use the same batch processing but without eligible validator processing
@@ -114,6 +111,26 @@ export class ProverService implements OnModuleInit {
     } finally {
       this.updateValidatorStorageMetrics();
     }
+  }
+
+  /**
+   * The execution block the lookback window starts at.
+   *
+   * Counting back `days * 86400 / 12` execution blocks assumes one execution block per slot. There is
+   * at most one, never more, so the window always reaches *further* back than configured, and the
+   * gap grows with the share of slots that produce no execution block - missed slots, and from Gloas
+   * on also proposed blocks whose payload was withheld. Measured on a Gloas devnet: for a one-day
+   * window the naive count started ~12 h too early. Walk the consensus layer instead - timestamp to
+   * slot, slot to its execution anchor - so the window is exactly as long as configured and does not
+   * drift with payload availability.
+   */
+  private async resolveLookbackFromBlock(daysToLookBack: number, currentBlock: number): Promise<number> {
+    const lookbackTimestamp = Math.floor(Date.now() / 1000) - daysToLookBack * 24 * 60 * 60;
+    const lookbackSlot = Math.max(0, this.consensus.timestampToSlot(lookbackTimestamp));
+    const { header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
+    const fromBlock = await resolveElBlockNumber(this.consensus, this.execution.provider, header);
+
+    return Math.min(Math.max(1, fromBlock), currentBlock);
   }
 
   /**

@@ -384,3 +384,89 @@ describe('ProverService.resolveProvableAnchor', () => {
     );
   });
 });
+
+// ─── resolveLookbackFromBlock — START_LOOKBACK_DAYS window ────────────────────
+
+// From Gloas on there is no fixed number of execution blocks per slot, so the window start has to be
+// derived through the consensus layer instead of counting 12-second blocks backwards.
+describe('ProverService.resolveLookbackFromBlock', () => {
+  const NOW_SLOT = 400_000;
+  const CURRENT_BLOCK = 300_000;
+
+  const makeLookbackService = ({ missed = [] as number[], anchors = {} as Record<number, number> } = {}) => {
+    const nextProposed = (slot: number) => {
+      let current = slot;
+      while (missed.includes(current)) current++;
+      return current;
+    };
+
+    return makeService({
+      consensus: {
+        timestampToSlot: (ts: number) => Math.floor((ts - HOODI_GENESIS) / SECONDS_PER_SLOT),
+        genesisTimestamp: HOODI_GENESIS,
+        findNextAvailableHeader: jest.fn(async (startSlot: number) => {
+          const slot = nextProposed(startSlot);
+          return { slot, header: makeHeader(slot) };
+        }),
+        getExecutionBlockHash: jest.fn(async (header: any) => `0xel${header.header.message.slot}`),
+      },
+      execution: {
+        provider: {
+          getBlock: jest.fn(async (hash: string) => {
+            const slot = Number(hash.replace('0xel', ''));
+            return anchors[slot] === undefined ? null : { number: anchors[slot] };
+          }),
+        },
+      },
+    });
+  };
+
+  beforeAll(() => {
+    // Freeze time so the lookback timestamp maps to a known slot
+    jest.useFakeTimers().setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
+  it('derives the first block of the window from the execution anchor of the lookback slot', async () => {
+    // 7 days back = 50400 slots
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({ anchors: { [lookbackSlot]: 111_222 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_222);
+    // Not the naive `currentBlock - days * 86400 / 12`, which assumes a block per slot
+    expect(fromBlock).not.toBe(CURRENT_BLOCK - 50_400);
+  });
+
+  it('scans forward when the lookback slot itself was never proposed', async () => {
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({
+      missed: [lookbackSlot, lookbackSlot + 1],
+      anchors: { [lookbackSlot + 2]: 111_230 },
+    });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_230);
+  });
+
+  it('never starts the window past the current block', async () => {
+    const service = makeLookbackService({ anchors: { [NOW_SLOT]: CURRENT_BLOCK + 50 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(0, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(CURRENT_BLOCK);
+  });
+
+  it('fails loudly when the EL does not know the anchored block', async () => {
+    const service = makeLookbackService({ anchors: {} });
+
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(
+      'is unknown to the EL node',
+    );
+  });
+});
