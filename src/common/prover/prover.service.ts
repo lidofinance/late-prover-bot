@@ -821,14 +821,23 @@ export class ProverService implements OnModuleInit {
     // Get delivery timestamp from the first exit request
     const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
-    // The block the validators are proven at. It needs no beacon roots entry of its own: the
-    // verifier reaches it from the recent block's state, so the first proposed block at or after
-    // the deadline is always usable.
-    const { slot: actualSlot, header: targetHeader } = await this.consensus.findNextAvailableHeader(deadlineSlot);
     const recentSlot = Number(provableFinalizedBlockHeader.header.slot);
     const slotsPerHistoricalRoot = Number(this.consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
+    const blockRootsWitness = this.verifier.supportsBlockRootsWitness();
 
-    if (actualSlot >= recentSlot) {
+    // Which block the validators are proven at depends on how the deployed verifier reaches it.
+    //
+    // Taking a block roots witness, it is reached from the recent block's state, so it needs no
+    // beacon roots entry of its own and the first proposed block at or after the deadline always
+    // works. Anchoring it through EIP-4788 itself, its root has to be in the ring buffer, which is
+    // what resolveProvableAnchor confirms - moving the block forward when it is not.
+    const target = blockRootsWitness
+      ? await this.consensus.findNextAvailableHeader(deadlineSlot)
+      : await this.resolveProvableAnchor(deadlineSlot);
+    const actualSlot = target.slot;
+    const targetHeader = target.header;
+
+    if (blockRootsWitness && actualSlot >= recentSlot) {
       // The recent block's state only holds roots of blocks before it
       this.loggerService.log(
         `[Blocks ${fromBlock}-${toBlock}] Deadline slot ${deadlineSlot} resolved to slot ${actualSlot}, ` +
@@ -837,8 +846,11 @@ export class ProverService implements OnModuleInit {
       return { processedValidators: 0, skippedValidators: 0 };
     }
 
-    // Same bound the verifier enforces on the block_roots ring buffer
-    const isOldSlot = recentSlot - actualSlot > slotsPerHistoricalRoot;
+    // The block roots ring is bounded by the same window the historical path takes over at. Without
+    // a witness the proven block is the anchor, and how old it may be is the head-relative check.
+    const isOldSlot = blockRootsWitness
+      ? recentSlot - actualSlot > slotsPerHistoricalRoot
+      : await this.isSlotOld(actualSlot);
 
     // Use the target slot - the slot the validator state is proven at - for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
@@ -850,6 +862,8 @@ export class ProverService implements OnModuleInit {
         stateRoot: targetHeader.header.message.state_root,
         bodyRoot: targetHeader.header.message.body_root,
       },
+      // Only the pre-Gloas verifier reads this: it looks the proven block's own root up in EIP-4788
+      ...(blockRootsWitness ? {} : { rootsTimestamp: (target as ProvableAnchor).rootsTimestamp }),
     };
 
     // Process all combined validators for this deadline slot
@@ -875,7 +889,7 @@ export class ProverService implements OnModuleInit {
         provableFinalizedBlockHeader,
         ssz,
       );
-    } else {
+    } else if (blockRootsWitness) {
       // Prove the target block against the anchor state's block_roots ring buffer
       const proof = generateBlockRootsProof(finalizedStateView, actualSlot % slotsPerHistoricalRoot);
       const targetBlock = {
@@ -888,6 +902,14 @@ export class ProverService implements OnModuleInit {
         exitRequest,
         provableFinalizedBlockHeader,
         targetBlock,
+        fromBlock,
+        toBlock,
+      );
+    } else {
+      await this.processCurrentSlotLegacy(
+        validatorWitnesses,
+        exitRequest,
+        provableDeadlineBlockHeader,
         fromBlock,
         toBlock,
       );
@@ -1110,6 +1132,62 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
+   * Submit against a verifier that anchors the proven block through EIP-4788 itself.
+   *
+   * Kept for the window between this bot and the protocol upgrade; the deployed verifier decides,
+   * see {@link VerifierContract.supportsBlockRootsWitness}.
+   */
+  private async processCurrentSlotLegacy(
+    validatorWitnesses: any[],
+    exitRequest: any,
+    provableBlockHeader: any,
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<void> {
+    const batches = this.createValidatorBatches(validatorWitnesses);
+
+    this.loggerService.log(
+      `[Blocks ${fromBlock}-${toBlock}] Processing current slot in ${batches.length} batches (legacy verifier):` +
+        `\n  Total validators: ${validatorWitnesses.length}` +
+        `\n  Block slot: ${provableBlockHeader.header.slot}` +
+        `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
+    );
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchStartTime = Date.now();
+
+      try {
+        await this.execution.execute(
+          async (beaconBlock, witnesses, exitRequestsData) =>
+            await this.verifier.verifyValidatorExitDelayLegacy(beaconBlock, witnesses, exitRequestsData),
+          async (beaconBlock, witnesses, exitRequestsData) =>
+            await this.verifier.populateVerifyValidatorExitDelayLegacy(beaconBlock, witnesses, exitRequestsData),
+          [provableBlockHeader, batch, exitRequest.exitRequestsData],
+        );
+
+        for (const witness of batch) {
+          this.reportedValidatorPubkeys.add(witness.pubkey);
+        }
+
+        this.loggerService.log(
+          `[Blocks ${fromBlock}-${toBlock}] ✅ Batch ${i + 1}/${batches.length} completed:` +
+            `\n  Validators: ${batch.length}` +
+            `\n  Total batch time: ${Date.now() - batchStartTime}ms`,
+        );
+      } catch (error) {
+        this.loggerService.error(
+          `[Blocks ${fromBlock}-${toBlock}] ❌ Batch ${i + 1}/${batches.length} failed:` +
+            `\n  Validators: ${batch.length}` +
+            `\n  Block slot: ${provableBlockHeader.header.slot}` +
+            `\n  Error: ${this.getErrorReference(error)}`,
+        );
+        throw error;
+      }
+    }
+  }
+
+  /**
    * Process all eligible validators from storage
    */
   private async processEligibleValidators(
@@ -1283,6 +1361,9 @@ export class ProverService implements OnModuleInit {
     const startTime = Date.now();
     try {
       this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Starting block processing`);
+
+      // An upgrade can move the verifier or change what it expects; pick that up without a restart
+      await this.verifier.refresh();
 
       // Prepare batches for processing
       const batches = this.createBatches(fromBlock, toBlock);

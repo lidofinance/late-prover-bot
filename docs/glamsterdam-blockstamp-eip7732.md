@@ -129,6 +129,14 @@ the recent state's `block_roots` ring, so it no longer matters whether an execut
 successor's timestamp. Only the recent block still needs an entry in the beacon roots buffer, which
 is what `resolveProvableAnchor` guarantees for the finalized anchor.
 
+The bot speaks both shapes and picks by **probing the deployed verifier**, not by a config flag:
+`GI_VALIDATORS()` exists only on the Gloas-capable one. That is deliberate - which shape applies is a
+property of the deployment, not of the chain (the new verifier can be deployed before the fork and
+handles pre-fork proofs too), and a flag would have to be flipped in lockstep with a protocol upgrade
+while a wrong value only surfaces at submission time. The probe repeats once per daemon cycle, so an
+upgrade - a new address in the locator or a new implementation behind the same one - is picked up
+without restarting the bot.
+
 Consequences for the bot:
 
 - the deadline block is simply the first proposed block at or after the deadline - no forward walk;
