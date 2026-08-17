@@ -1,4 +1,5 @@
 import { ProverService } from './prover.service';
+import { EARLIEST_ANCHORABLE_SLOT } from '../helpers/el-anchor';
 import { RequestError } from '../providers/base/rest-provider';
 
 // Minimal prometheus mock covering every counter/timer used in processValidator
@@ -473,6 +474,21 @@ describe('ProverService.resolveLookbackFromBlock', () => {
     const fromBlock = await (service as any).resolveLookbackFromBlock(0, CURRENT_BLOCK);
 
     expect(fromBlock).toBe(CURRENT_BLOCK);
+  });
+
+  // On a chain younger than the window the computed slot is negative. Slot 0 is not a way out
+  // either: the genesis block anchors on a zero execution block hash the EL cannot resolve.
+  it('starts the window at the first anchorable slot on a chain younger than the window', async () => {
+    const service = makeLookbackService({ anchors: { [EARLIEST_ANCHORABLE_SLOT]: 1 } });
+    const consensus = (service as any).consensus;
+    jest.setSystemTime((HOODI_GENESIS + 25_000 * SECONDS_PER_SLOT) * 1000);
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(consensus.findNextAvailableHeader).toHaveBeenCalledWith(EARLIEST_ANCHORABLE_SLOT);
+    expect(fromBlock).toBe(1);
+
+    jest.setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
   });
 
   it('fails loudly when the EL does not know the anchored block', async () => {

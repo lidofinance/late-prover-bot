@@ -8,7 +8,7 @@ import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
-import { resolveElBlockNumber } from '../helpers/el-anchor';
+import { EARLIEST_ANCHORABLE_SLOT, resolveElBlockNumber } from '../helpers/el-anchor';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
@@ -126,7 +126,7 @@ export class ProverService implements OnModuleInit {
    */
   private async resolveLookbackFromBlock(daysToLookBack: number, currentBlock: number): Promise<number> {
     const lookbackTimestamp = Math.floor(Date.now() / 1000) - daysToLookBack * 24 * 60 * 60;
-    const lookbackSlot = Math.max(0, this.consensus.timestampToSlot(lookbackTimestamp));
+    const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
     const { header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
     const fromBlock = await resolveElBlockNumber(this.consensus, this.execution.provider, header);
 
