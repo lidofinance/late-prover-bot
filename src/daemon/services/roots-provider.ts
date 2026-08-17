@@ -5,14 +5,9 @@ import { PrometheusService } from 'common/prometheus';
 
 import { LastProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
+import { EARLIEST_ANCHORABLE_SLOT } from '../../common/helpers/el-anchor';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
-
-/**
- * Lowest slot the daemon may start from. Not zero: the genesis block carries a default-constructed
- * body, so its execution block hash is all zeroes and cannot be resolved into an execution anchor.
- */
-const EARLIEST_ANCHORABLE_SLOT = 1;
 
 @Injectable()
 export class RootsProvider {

@@ -7,6 +7,12 @@ interface BlockNumberSource {
 }
 
 /**
+ * Lowest slot that can serve as an execution anchor. Not zero: the genesis block body is
+ * default-constructed, so its execution block hash is all zeroes and no EL node knows that block.
+ */
+export const EARLIEST_ANCHORABLE_SLOT = 1;
+
+/**
  * The execution block number a consensus block is anchored on.
  *
  * From Gloas on there is no longer one execution block per slot - a proposed block whose payload was
