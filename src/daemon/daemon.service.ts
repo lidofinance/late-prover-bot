@@ -10,6 +10,7 @@ import { RootsProcessor } from './services/roots-processor';
 import { RootsProvider } from './services/roots-provider';
 import sleep from './utils/sleep';
 import { ConfigService } from '../common/config/config.service';
+import { ChainNotReadyError } from '../common/errors/chain-not-ready.error';
 import { serializeError } from '../common/logger/safe-error-format';
 import { APP_NAME, PrometheusService } from '../common/prometheus';
 import { Consensus } from '../common/providers/consensus/consensus';
@@ -156,8 +157,9 @@ export class DaemonService implements OnModuleInit {
 
     if (!roots) {
       this.logger.log(`💤 Wait for the next finalized root`);
-      this.prometheus.latestSuccessRun.setToCurrentTime();
 
+      // Deliberately no latestSuccessRun bump: having no roots to work with is waiting, not a
+      // completed cycle, and a bot stuck here has to stay distinguishable from a healthy one.
       // Track daemon sleep due to no roots
       this.prometheus.daemonSleepCount.inc({
         reason: 'no_new_roots',
@@ -199,6 +201,20 @@ export class DaemonService implements OnModuleInit {
           `\n  Processing time: ${Date.now() - baseRunStartTime}ms`,
       );
     } catch (error) {
+      // The chain simply is not ready for this transition yet (EL behind, anchor pruned or not yet
+      // created). Keep the last processed root untouched and retry the same transition next cycle -
+      // no stack trace, no error-recovery path.
+      if (error instanceof ChainNotReadyError) {
+        this.logger.warn(`💤 Chain is not ready to be processed yet: ${error.message}`);
+
+        this.prometheus.daemonSleepCount.inc({
+          reason: 'chain_not_ready',
+        });
+
+        await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
+        return;
+      }
+
       this.logger.error('Failed to process roots', serializeError(error));
       throw error;
     } finally {

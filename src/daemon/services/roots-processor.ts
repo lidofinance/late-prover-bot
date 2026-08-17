@@ -5,6 +5,7 @@ import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
 import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
+import { ChainNotReadyError } from '../../common/errors/chain-not-ready.error';
 import { resolveElBlockNumber } from '../../common/helpers/el-anchor';
 import { serializeError } from '../../common/logger/safe-error-format';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
@@ -48,7 +49,10 @@ export class RootsProcessor {
         slot: Number(latest.header.message.slot),
       });
     } catch (error) {
-      this.logger.error(`Failed to process root [${prev.root}]`, serializeError(error));
+      // Waiting for the chain is the daemon's business to report, once, without a stack trace
+      if (!(error instanceof ChainNotReadyError)) {
+        this.logger.error(`Failed to process root [${prev.root}]`, serializeError(error));
+      }
       throw error;
     }
   }
