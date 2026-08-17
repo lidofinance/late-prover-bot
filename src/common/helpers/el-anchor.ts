@@ -1,3 +1,4 @@
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
 import { Consensus } from '../providers/consensus/consensus';
 import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 
@@ -27,7 +28,9 @@ export async function resolveElBlockNumber(
   const blockHash = await consensus.getExecutionBlockHash(header);
   const block = await provider.getBlock(blockHash);
   if (!block) {
-    throw new Error(
+    // Not a failure of ours: the EL is behind, has pruned the block, or the anchor does not exist
+    // yet. The daemon waits for the next cycle instead of erroring out.
+    throw new ChainNotReadyError(
       `Execution block [${blockHash}] anchored at slot [${header.header.message.slot}] is unknown to the EL node`,
     );
   }

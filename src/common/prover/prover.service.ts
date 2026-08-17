@@ -8,6 +8,7 @@ import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
 import { EARLIEST_ANCHORABLE_SLOT, resolveElBlockNumber } from '../helpers/el-anchor';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
@@ -107,7 +108,16 @@ export class ProverService implements OnModuleInit {
           `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
       );
     } catch (error) {
-      this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      // Startup must not depend on the chain being ready: the storage is a warm cache, and the
+      // daemon loop accumulates the same validators as it walks forward.
+      if (error instanceof ChainNotReadyError) {
+        this.loggerService.warn(
+          `Skipping storage initialization, the chain is not ready yet: ${error.message}` +
+            `\n  Storage stays empty and fills up as the daemon processes roots`,
+        );
+      } else {
+        this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      }
     } finally {
       this.updateValidatorStorageMetrics();
     }

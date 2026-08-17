@@ -1,4 +1,5 @@
 import { ProverService } from './prover.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
 import { EARLIEST_ANCHORABLE_SLOT } from '../helpers/el-anchor';
 import { RequestError } from '../providers/base/rest-provider';
 
@@ -491,9 +492,11 @@ describe('ProverService.resolveLookbackFromBlock', () => {
     jest.setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
   });
 
-  it('fails loudly when the EL does not know the anchored block', async () => {
+  // Typed so the daemon can hold its state and wait instead of treating it as a failure
+  it('reports an unknown anchor as the chain not being ready', async () => {
     const service = makeLookbackService({ anchors: {} });
 
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(ChainNotReadyError);
     await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(
       'is unknown to the EL node',
     );
