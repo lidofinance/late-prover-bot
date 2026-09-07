@@ -215,6 +215,25 @@ curl http://localhost:8081/health
 
 ## Troubleshooting
 
+### Exit Requests Are Not Picked Up
+
+Symptom: a validator is well past its exit deadline, but the bot never generates a proof for it,
+and the logs show `Failed to extract exit requests data for <txHash>`.
+
+The bot reads the exit requests payload out of the calldata of the transaction that emitted
+`ExitDataProcessing`. That call is not necessarily the top-level one: oracle members may submit
+through a forwarding contract (for example `execute(address,bytes)`), which nests the real
+`submitReportData` calldata inside its own arguments. This is expected and handled — the payload
+is searched for anywhere in the calldata and accepted only when it hashes to the
+`exitRequestsHash` from the event (see `src/common/helpers/exit-requests-calldata.ts`).
+
+So this error means the payload could not be recovered at all: the submitting contract does not
+embed the exit bus calldata verbatim, or a new submission method was added to the exit bus. The
+error log includes the transaction target, the top-level selector and the calldata size — enough
+to identify the new shape. The affected requests are skipped entirely, so they must be
+re-ingested after the fix: restart with `START_LOOKBACK_DAYS` wide enough to cover the outage,
+since the validator storage is in-memory and only the lookback window is rescanned on startup.
+
 ### Gas-Related Errors
 
 #### How Gas Limit Works
@@ -317,6 +336,15 @@ curl http://localhost:8081/metrics | grep late_prover_bot
 - **Memory Usage**: Heap usage and RSS memory
 - **Daemon Operations**: Cycle duration and sleep tracking
 - **Error Tracking**: Various error counters
+
+`exit_requests_processed_count{status}` splits exit request ingestion by outcome. Watch
+`status="decode_error"`: it means an `ExitDataProcessing` event was found but no exit requests
+payload matching its hash could be recovered from the transaction, so the request and all of its
+validators were skipped. It should always be zero — alert on any increase:
+
+```
+increase(exit_requests_processed_count{status="decode_error"}[1h]) > 0
+```
 
 ### Monitoring Stack
 
