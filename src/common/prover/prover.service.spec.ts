@@ -59,7 +59,7 @@ const makeService = (overrides: Record<string, any> = {}) => {
     {}, // exitRequests
     {}, // verifier
     {}, // stakingRouter
-    {}, // execution
+    overrides.execution ?? {}, // execution
     makePrometheusMock(), // prometheus
     {}, // config
     50, // validatorBatchSize
@@ -257,7 +257,7 @@ describe('ProverService.decodeValidatorsData', () => {
   });
 });
 
-// ─── calcRootsTimestamp — EIP-4788 lookup key ─────────────────────────────────
+// ─── resolveProvableAnchor — EIP-4788 lookup key ──────────────────────────────
 
 // Hoodi (chain 560048) constants, taken from the network that produced the RootNotFound() incident
 const HOODI_GENESIS = 1742213400;
@@ -269,51 +269,118 @@ const PROVABLE_SLOT = 3624533;
 const MISSED_SLOT = 3624534;
 const NEXT_PROPOSED_SLOT = 3624535;
 
-const missedSlots = (missed: number[]) =>
-  jest.fn(async (blockId: string) => {
-    if (missed.includes(Number(blockId))) {
-      throw new RequestError(`NOT_FOUND: beacon block at slot ${blockId}`, 404);
+const rootOf = (slot: number) => `0xroot${slot}`;
+
+/**
+ * Chain stub. `missed` slots have no block; `unstored` slots produce no beacon roots entry - a
+ * missed execution block before Gloas, a withheld payload after it. Everything else is answered by
+ * the predeploy the way the real one would.
+ */
+const makeAnchorService = ({ missed = [] as number[], unstored = [] as number[] } = {}) => {
+  const getBeaconHeader = jest.fn(async (blockId: string) => {
+    const slot = Number(blockId);
+    if (missed.includes(slot)) {
+      throw new RequestError(`NOT_FOUND: beacon block at slot ${slot}`, 404);
     }
-    return { header: { message: { slot: blockId } } };
+    return { root: rootOf(slot), header: { message: { slot: blockId } } };
   });
 
-const makeHoodiService = (getBeaconHeader: jest.Mock) =>
-  makeService({
+  // The execution block of slot W stores the root of W's parent under ts(W)
+  const call = jest.fn(async ({ data }: { to: string; data: string }) => {
+    const timestamp = Number(BigInt(data));
+    const writerSlot = (timestamp - HOODI_GENESIS) / SECONDS_PER_SLOT;
+    if (unstored.includes(writerSlot)) return '0x';
+    let parent = writerSlot - 1;
+    while (missed.includes(parent)) parent--;
+    return rootOf(parent);
+  });
+
+  const service = makeService({
     consensus: {
       genesisTimestamp: HOODI_GENESIS,
       beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT },
       slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
       getBeaconHeader,
     },
+    execution: { provider: { call } },
   });
 
-describe('ProverService.calcRootsTimestamp', () => {
+  return { service, call };
+};
+
+describe('ProverService.resolveProvableAnchor', () => {
   it('skips a missed slot and keys on the next proposed slot (regression for RootNotFound)', async () => {
-    const service = makeHoodiService(missedSlots([MISSED_SLOT]));
+    const { service } = makeAnchorService({ missed: [MISSED_SLOT] });
 
-    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
 
+    expect(anchor.slot).toBe(PROVABLE_SLOT);
     // Timestamp of slot 3624535 - the block that actually stored the slot-3624533 root.
     // Verified on Hoodi: BEACON_ROOTS.get(1785707820) == 0x37350b7f...3702a00c
-    expect(rootsTimestamp).toBe(1785707820);
+    expect(anchor.rootsTimestamp).toBe(1785707820);
     // The old `genesis + (slot + 1) * SECONDS_PER_SLOT` formula produced this, and the beacon roots
     // predeploy reverts on it because no execution block carries a missed slot's timestamp.
-    expect(rootsTimestamp).not.toBe(1785707808);
+    expect(anchor.rootsTimestamp).not.toBe(1785707808);
   });
 
   it('keys on slot + 1 when that slot was proposed', async () => {
-    const service = makeHoodiService(missedSlots([]));
+    const { service } = makeAnchorService();
 
-    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
 
-    expect(rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
+    expect(anchor.slot).toBe(PROVABLE_SLOT);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
   });
 
   it('skips a run of consecutive missed slots', async () => {
-    const service = makeHoodiService(missedSlots([MISSED_SLOT, NEXT_PROPOSED_SLOT, NEXT_PROPOSED_SLOT + 1]));
+    const { service } = makeAnchorService({
+      missed: [MISSED_SLOT, NEXT_PROPOSED_SLOT, NEXT_PROPOSED_SLOT + 1],
+    });
 
-    const rootsTimestamp = await (service as any).calcRootsTimestamp(PROVABLE_SLOT);
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
 
-    expect(rootsTimestamp).toBe(HOODI_GENESIS + (NEXT_PROPOSED_SLOT + 2) * SECONDS_PER_SLOT);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (NEXT_PROPOSED_SLOT + 2) * SECONDS_PER_SLOT);
+  });
+
+  it('confirms the root against the predeploy rather than assuming it is there', async () => {
+    const { service, call } = makeAnchorService();
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0].to).toBe('0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02');
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
+  });
+
+  // No execution block carried that slot's timestamp, so nothing stored the anchor's root and no
+  // later timestamp ever will - the anchor itself has to move.
+  it('moves the anchor forward when nothing stored its root', async () => {
+    const { service } = makeAnchorService({ unstored: [PROVABLE_SLOT + 1] });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT + 1);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 2) * SECONDS_PER_SLOT);
+  });
+
+  it('moves the anchor past a run of unstored roots and missed slots', async () => {
+    const { service } = makeAnchorService({
+      missed: [PROVABLE_SLOT + 2],
+      unstored: [PROVABLE_SLOT + 1, PROVABLE_SLOT + 3],
+    });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT + 3);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 4) * SECONDS_PER_SLOT);
+  });
+
+  it('gives up when the predeploy holds none of the candidate roots', async () => {
+    const unstored = Array.from({ length: 32 }, (_, i) => PROVABLE_SLOT + 1 + i);
+    const { service } = makeAnchorService({ unstored });
+
+    await expect((service as any).resolveProvableAnchor(PROVABLE_SLOT)).rejects.toThrow(
+      'Failed to find a provable anchor',
+    );
   });
 });
