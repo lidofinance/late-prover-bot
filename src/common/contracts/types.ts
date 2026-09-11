@@ -23,6 +23,18 @@ export interface HistoricalHeaderWitness {
   proof: string[];
 }
 
+/**
+ * A block header proven against a recent block's `state.block_roots` ring buffer.
+ *
+ * This is how the deadline block reaches the verifier: only the recent block is anchored through
+ * EIP-4788, and the block being proven is reached from that block's state, so it does not need an
+ * entry in the beacon roots buffer of its own.
+ */
+export interface BlockRootsHeaderWitness {
+  header: BeaconBlockHeader;
+  proof: string[];
+}
+
 export interface StakingModule {
   id: number;
   stakingModuleAddress: string;
