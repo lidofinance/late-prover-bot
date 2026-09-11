@@ -1,11 +1,12 @@
 import { SimpleFallbackJsonRpcBatchProvider } from '@lido-nestjs/execution';
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
-import { hexlify } from 'ethers/lib/utils';
 
 import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
 import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
+import { ChainNotReadyError } from '../../common/errors/chain-not-ready.error';
+import { resolveElBlockNumber } from '../../common/helpers/el-anchor';
 import { serializeError } from '../../common/logger/safe-error-format';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
 import { getSizeRangeCategory } from '../../common/prometheus/decorators';
@@ -48,7 +49,10 @@ export class RootsProcessor {
         slot: Number(latest.header.message.slot),
       });
     } catch (error) {
-      this.logger.error(`Failed to process root [${prev.root}]`, serializeError(error));
+      // Waiting for the chain is the daemon's business to report, once, without a stack trace
+      if (!(error instanceof ChainNotReadyError)) {
+        this.logger.error(`Failed to process root [${prev.root}]`, serializeError(error));
+      }
       throw error;
     }
   }
@@ -59,15 +63,10 @@ export class RootsProcessor {
   private async processBlockRoot(prevHeader: BlockHeaderResponse, finalizedHeader: BlockHeaderResponse): Promise<void> {
     const processingStartTime = Date.now();
 
-    // CL blocks handling
-    const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
-    const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
-    const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash);
-    const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash);
-
-    // EL blocks handling
-    const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number;
-    const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number;
+    const [prevBlockNumber, finalizedBlockNumber] = await Promise.all([
+      resolveElBlockNumber(this.consensus, this.provider, prevHeader),
+      resolveElBlockNumber(this.consensus, this.provider, finalizedHeader),
+    ]);
 
     const blockRange = finalizedBlockNumber - prevBlockNumber;
     const rangeSizeCategory = getSizeRangeCategory(blockRange);
@@ -98,7 +97,9 @@ export class RootsProcessor {
           `\n  Range: ${prevBlockNumber} -> ${finalizedBlockNumber}` +
           `\n  Size: ${blockRange} blocks` +
           `\n  Duration: ${processingDuration}ms` +
-          `\n  Avg per block: ${(processingDuration / blockRange).toFixed(2)}ms`,
+          // From Gloas on the range can legitimately be empty: a slot whose payload was withheld
+          // adds no execution block, so two consecutive anchors can be the same block.
+          `\n  Avg per block: ${blockRange > 0 ? `${(processingDuration / blockRange).toFixed(2)}ms` : 'n/a'}`,
       );
     } catch (error) {
       this.logger.error(

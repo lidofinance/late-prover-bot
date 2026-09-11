@@ -310,15 +310,15 @@
   resolved "https://registry.npmjs.org/@borewit/text-codec/-/text-codec-0.1.1.tgz#7e7f27092473d5eabcffef693a849f2cc48431da"
   integrity sha512-5L/uBxmjaCIX5h8Z+uu+kA9BQLkc/Wl06UGR5ajNRxu+/XjonB5i8JpgFMrPj3LXTCPA0pv8yxUvbUi+QthGGA==
 
+"@chainsafe/as-sha256@":
+  version "1.2.4"
+  resolved "https://registry.npmjs.org/@chainsafe/as-sha256/-/as-sha256-1.2.4.tgz#afd2dd6a4b519b3f2fc825b0449c217a4f10cf4b"
+  integrity sha512-3GXDysZOKD6cTYbm48lEdXdUbS7cafjXQZfgHOspTByhoGR/JM3KBXyF3vE6bf63ImjNPyoEZwnQcpYPQ6k3bQ==
+
 "@chainsafe/as-sha256@0.5.0":
   version "0.5.0"
   resolved "https://registry.npmjs.org/@chainsafe/as-sha256/-/as-sha256-0.5.0.tgz#2523fbef2b80b5000f9aa71f4a76e5c2c5c076bb"
   integrity sha512-dTIY6oUZNdC5yDTVP5Qc9hAlKAsn0QTQ2DnQvvsbTnKSTbYs3p5RPN0aIUqN0liXei/9h24c7V0dkV44cnWIQA==
-
-"@chainsafe/as-sha256@1.2.0":
-  version "1.2.0"
-  resolved "https://registry.npmjs.org/@chainsafe/as-sha256/-/as-sha256-1.2.0.tgz#5764ac9959e147fe0908dd0f66c0cce525a633b3"
-  integrity sha512-H2BNHQ5C3RS+H0ZvOdovK6GjFAyq5T6LClad8ivwj9Oaiy28uvdsGVS7gNJKuZmg0FGHAI+n7F0Qju6U0QkKDA==
 
 "@chainsafe/hashtree-darwin-arm64@1.0.1":
   version "1.0.1"
@@ -386,6 +386,15 @@
     "@chainsafe/hashtree-linux-x64-musl" "1.0.2"
     "@chainsafe/hashtree-win32-x64-msvc" "1.0.2"
 
+"@chainsafe/persistent-merkle-tree@":
+  version "1.3.0"
+  resolved "https://registry.npmjs.org/@chainsafe/persistent-merkle-tree/-/persistent-merkle-tree-1.3.0.tgz#ce8cd516a9603ccd83d170bc38b5256141f608a5"
+  integrity sha512-xGe95xNkYayC5BYQpo7ft5oHwyf52YtqBip+GJqZ9XgKSzraw93qUMNeqKrOVJbZM5HEOys8xxkt0h7VD1a9cw==
+  dependencies:
+    "@chainsafe/as-sha256" ""
+    "@chainsafe/hashtree" "1.0.2"
+    "@noble/hashes" "^1.3.0"
+
 "@chainsafe/persistent-merkle-tree@0.8.0":
   version "0.8.0"
   resolved "https://registry.npmjs.org/@chainsafe/persistent-merkle-tree/-/persistent-merkle-tree-0.8.0.tgz#18e2f0a5de3a0b59c6e5be8797a78e0d209dd7dc"
@@ -395,22 +404,13 @@
     "@chainsafe/hashtree" "1.0.1"
     "@noble/hashes" "^1.3.0"
 
-"@chainsafe/persistent-merkle-tree@1.2.1":
-  version "1.2.1"
-  resolved "https://registry.npmjs.org/@chainsafe/persistent-merkle-tree/-/persistent-merkle-tree-1.2.1.tgz#80f052e4a04c63304d5198dbf2fa49e104a0365a"
-  integrity sha512-AOSEVLfaqwb9eTCKuY1ri0DrRxVQ3Rh+we1VBj1GahUGfEdE8OC3Vkbca7Up6RoI9Ip9FLnI31Y7AjKH9ZqAGA==
+"@chainsafe/ssz@^1.6.2":
+  version "1.6.2"
+  resolved "https://registry.npmjs.org/@chainsafe/ssz/-/ssz-1.6.2.tgz#3b0a6c9a1bad566e53a97660b1a4127ae5c58427"
+  integrity sha512-XJELFJBHBstcvyRuXWPmNc/WRWmV5FVV03+iPTpgtCPQaImEHjKU4bc/5me35dRrXpehC04LD4ePYayOUjxFbw==
   dependencies:
-    "@chainsafe/as-sha256" "1.2.0"
-    "@chainsafe/hashtree" "1.0.2"
-    "@noble/hashes" "^1.3.0"
-
-"@chainsafe/ssz@^1.2.2":
-  version "1.2.2"
-  resolved "https://registry.npmjs.org/@chainsafe/ssz/-/ssz-1.2.2.tgz#3c41b70bac9e646cb4cce0d49bda176ca87984ad"
-  integrity sha512-kIA3fJO6h2RsQndsNBlCSQYB4xfdZGMQvNPKPgbiB0mysV6okuxeJU3Nyl16xDCKv3tqej76eGYHcyjMVt7V1w==
-  dependencies:
-    "@chainsafe/as-sha256" "1.2.0"
-    "@chainsafe/persistent-merkle-tree" "1.2.1"
+    "@chainsafe/as-sha256" ""
+    "@chainsafe/persistent-merkle-tree" ""
 
 "@colors/colors@1.5.0":
   version "1.5.0"
@@ -1226,18 +1226,18 @@
   dependencies:
     call-bind "^1.0.8"
 
-"@lodestar/params@^1.34.1":
-  version "1.34.1"
-  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.34.1.tgz#486238274a52c93d383d97d8beb9e0a32a7750da"
-  integrity sha512-ufzGzUrNko3Mj2Dooq5wYcJzrrXrYQ9G+N3mnQpOke5DvejZtYNgBV+W05uBymPd/BsT4tBCP0SjfHu3enxuig==
+"@lodestar/params@1.46.0-rc.1", "@lodestar/params@^1.46.0-rc.1":
+  version "1.46.0-rc.1"
+  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.46.0-rc.1.tgz#1e7f8135a952c3e25cc76a3a1dcc73783a55a19c"
+  integrity sha512-yHZKhI4RYURr4MAfuXxbVGRQ31krp60q9oH4zy6WgN2JbybgSU2Xd79MCNhuGUoC5yuFCJMftxW0CBvNPN1qsw==
 
-"@lodestar/types@^1.34.1":
-  version "1.34.1"
-  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.34.1.tgz#7a7ea573d32006f90ea39561746bedd7ca56073f"
-  integrity sha512-QgX/yzWxGSGvFQzx20NoKmXb/2YyUKuVZmtUvKcApyQ6CLJGXgCY0Ygf7HsdP2nNMW4Rkv/0aGFew8WTp8rG+w==
+"@lodestar/types@1.46.0-rc.1":
+  version "1.46.0-rc.1"
+  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.46.0-rc.1.tgz#69448192f5690d4ba3250d24945b5a3995e8b0c3"
+  integrity sha512-jtsmeGdZfXNi9xztoLr8QqrxUqbV5CGr/MrGcFbusc02no+OekpIgapwARRga9jHgsahqsqJZf0Z6hv7eYDHOQ==
   dependencies:
-    "@chainsafe/ssz" "^1.2.2"
-    "@lodestar/params" "^1.34.1"
+    "@chainsafe/ssz" "^1.6.2"
+    "@lodestar/params" "^1.46.0-rc.1"
     ethereum-cryptography "^2.0.0"
 
 "@lukeed/csprng@^1.0.0":

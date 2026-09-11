@@ -8,10 +8,11 @@ import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
+import { EARLIEST_ANCHORABLE_SLOT, resolveElBlockNumber } from '../helpers/el-anchor';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
-import { RequestError } from '../providers/base/rest-provider';
 import { Consensus } from '../providers/consensus/consensus';
 import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 import { Execution } from '../providers/execution/execution';
@@ -89,18 +90,14 @@ export class ProverService implements OnModuleInit {
 
       // Calculate block range for configured lookback period
       const currentBlock = await this.execution.provider.getBlockNumber();
-      const SECONDS_PER_DAY = 24 * 60 * 60;
-      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS');
-      const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
-
-      const blocksToLookBack = Math.floor((daysToLookBack * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
-      const fromBlock = Math.max(1, currentBlock - blocksToLookBack);
+      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS') as number;
+      const fromBlock = await this.resolveLookbackFromBlock(daysToLookBack, currentBlock);
 
       this.loggerService.log(
         `Scanning for exit requests in recent blocks:` +
           `\n  Current block: ${currentBlock}` +
           `\n  From block: ${fromBlock}` +
-          `\n  Block range: ${blocksToLookBack} blocks (${daysToLookBack} days)`,
+          `\n  Block range: ${currentBlock - fromBlock} blocks (${daysToLookBack} days)`,
       );
 
       // Use the same batch processing but without eligible validator processing
@@ -111,10 +108,39 @@ export class ProverService implements OnModuleInit {
           `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
       );
     } catch (error) {
-      this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      // Startup must not depend on the chain being ready: the storage is a warm cache, and the
+      // daemon loop accumulates the same validators as it walks forward.
+      if (error instanceof ChainNotReadyError) {
+        this.loggerService.warn(
+          `Skipping storage initialization, the chain is not ready yet: ${error.message}` +
+            `\n  Storage stays empty and fills up as the daemon processes roots`,
+        );
+      } else {
+        this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      }
     } finally {
       this.updateValidatorStorageMetrics();
     }
+  }
+
+  /**
+   * The execution block the lookback window starts at.
+   *
+   * Counting back `days * 86400 / 12` execution blocks assumes one execution block per slot. There is
+   * at most one, never more, so the window always reaches *further* back than configured, and the
+   * gap grows with the share of slots that produce no execution block - missed slots, and from Gloas
+   * on also proposed blocks whose payload was withheld. Measured on a Gloas devnet: for a one-day
+   * window the naive count started ~12 h too early. Walk the consensus layer instead - timestamp to
+   * slot, slot to its execution anchor - so the window is exactly as long as configured and does not
+   * drift with payload availability.
+   */
+  private async resolveLookbackFromBlock(daysToLookBack: number, currentBlock: number): Promise<number> {
+    const lookbackTimestamp = Math.floor(Date.now() / 1000) - daysToLookBack * 24 * 60 * 60;
+    const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
+    const { header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
+    const fromBlock = await resolveElBlockNumber(this.consensus, this.execution.provider, header);
+
+    return Math.min(Math.max(1, fromBlock), currentBlock);
   }
 
   /**
@@ -1438,10 +1464,10 @@ export class ProverService implements OnModuleInit {
    * state is read at that same later slot.
    */
   private async resolveProvableAnchor(startSlot: number): Promise<ProvableAnchor> {
-    let anchor = await this.findNextAvailableSlot(startSlot);
+    let anchor = await this.consensus.findNextAvailableHeader(startSlot);
 
     for (let attempt = 0; attempt < MAX_ANCHOR_ADVANCES; attempt++) {
-      const writer = await this.findNextAvailableSlot(anchor.slot + 1);
+      const writer = await this.consensus.findNextAvailableHeader(anchor.slot + 1);
       const rootsTimestamp = this.consensus.slotToTimestamp(writer.slot);
       const storedRoot = await this.getBeaconBlockRoot(rootsTimestamp);
 
@@ -1480,48 +1506,6 @@ export class ProverService implements OnModuleInit {
       // Reverts for a timestamp outside the ring buffer
       return null;
     }
-  }
-
-  /**
-   * Find the next available (non-skipped) slot at or after the given slot
-   * Beacon chain can have skipped slots where no block was proposed
-   *
-   * @param startSlot The slot to start searching from
-   * @param maxAttempts Maximum number of slots to try (default: 32, one epoch)
-   * @returns The next available slot number and its header
-   */
-  private async findNextAvailableSlot(
-    startSlot: number,
-    maxAttempts: number = 32,
-  ): Promise<{ slot: number; header: any }> {
-    let currentSlot = startSlot;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const header = await this.consensus.getBeaconHeader(currentSlot.toString());
-        // Successfully got header - this slot has a block
-        this.loggerService.log(
-          `Found available slot ${currentSlot}` +
-            (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
-        );
-        return { slot: currentSlot, header };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Only retry for 404 errors (skipped slots), throw all other errors
-        if (!(error instanceof RequestError && error.statusCode === 404)) {
-          throw error;
-        }
-
-        this.loggerService.debug?.(`Slot ${currentSlot} is skipped (404), trying next slot`);
-        currentSlot++;
-      }
-    }
-
-    throw new Error(
-      `Failed to find available slot after ${maxAttempts} attempts starting from slot ${startSlot}. Last error: ${lastError?.message}`,
-    );
   }
 
   /**
