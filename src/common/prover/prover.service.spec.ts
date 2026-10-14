@@ -411,51 +411,44 @@ describe('ProverService.resolveProvableAnchor', () => {
 // ─── processDeadlineSlot — choosing the proof path ────────────────────────────
 
 /** Runs processDeadlineSlot with the proof building and submission stubbed out */
-const runDeadlineSlot = async (deadlineSlot: number, head: number, { blockRootsWitness = false } = {}) => {
+const runDeadlineSlot = async (deadlineSlot: number, head: number) => {
   const { service, call } = makeAnchorService({ head });
   service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async () => 0) };
-  service.verifier = { supportsBlockRootsWitness: () => blockRootsWitness };
   jest.spyOn(service, 'processValidatorGroup').mockResolvedValue({
     validatorWitnesses: [{}],
     processedValidators: 1,
     skippedValidators: 0,
   });
   const processHistoricalSlot = jest.spyOn(service, 'processHistoricalSlot').mockResolvedValue(undefined);
-  const processCurrentSlotLegacy = jest.spyOn(service, 'processCurrentSlotLegacy').mockResolvedValue(undefined);
-  const finalizedHeader = { header: { slot: head } };
+  const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
 
-  await service.processDeadlineSlot(deadlineSlot, [{ validators: [], exitRequest: {} }], {}, finalizedHeader, {}, 0, 0);
+  await service.processDeadlineSlot(deadlineSlot, [{ validators: [], exitRequest: {} }], {}, {}, {}, 0, 0);
 
-  return { call, processHistoricalSlot, processCurrentSlotLegacy };
+  return { call, processHistoricalSlot, processCurrentSlot };
 };
 
 describe('ProverService.processDeadlineSlot', () => {
   // A deadline older than the beacon roots buffer is proven through the historical summaries of the
   // finalized anchor. Its own entry is long evicted, and the proof does not need it.
-  it.each([
-    ['the EIP-4788 verifier', false],
-    ['the block roots verifier', true],
-  ])('proves an old deadline through the historical path with %s', async (_, blockRootsWitness) => {
+  it('proves an old deadline through the historical path without its beacon roots entry', async () => {
     const head = PROVABLE_SLOT + 2 * 7200;
 
-    const { call, processHistoricalSlot, processCurrentSlotLegacy } = await runDeadlineSlot(PROVABLE_SLOT, head, {
-      blockRootsWitness,
-    });
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
 
-    expect(processCurrentSlotLegacy).not.toHaveBeenCalled();
+    expect(processCurrentSlot).not.toHaveBeenCalled();
     expect(processHistoricalSlot).toHaveBeenCalledTimes(1);
     expect(processHistoricalSlot.mock.calls[0][0]).toMatchObject({ slot: PROVABLE_SLOT });
     expect(call).not.toHaveBeenCalled();
   });
 
-  it('proves a recent deadline against its confirmed beacon roots entry with the EIP-4788 verifier', async () => {
+  it('proves a recent deadline against its confirmed beacon roots entry', async () => {
     const head = PROVABLE_SLOT + 100;
 
-    const { call, processHistoricalSlot, processCurrentSlotLegacy } = await runDeadlineSlot(PROVABLE_SLOT, head);
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
 
     expect(processHistoricalSlot).not.toHaveBeenCalled();
-    expect(processCurrentSlotLegacy).toHaveBeenCalledTimes(1);
-    expect(processCurrentSlotLegacy.mock.calls[0][2]).toMatchObject({
+    expect(processCurrentSlot).toHaveBeenCalledTimes(1);
+    expect(processCurrentSlot.mock.calls[0][2]).toMatchObject({
       header: { slot: PROVABLE_SLOT },
       rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
     });
