@@ -98,7 +98,7 @@ Left as is, deliberately:
   node may simply not have imported the block yet and the retry is what saves the cycle. On a chain
   with many missed slots this shows up as log noise during anchor resolution; it is not a failure.
 
-## Open blocker: the verifier contract cannot verify Gloas proofs yet
+## 4. The verifier (lidofinance/core#1940)
 
 Glamsterdam also brings **EIP-7916 progressive SSZ lists**. In the current spec `BeaconState` is a
 `ProgressiveContainer` and `Validators` is a `ProgressiveList`, which re-merkleizes the registry:
@@ -108,12 +108,20 @@ Glamsterdam also brings **EIP-7916 progressive SSZ lists**. In the current spec 
 | Electra / Fulu | `164926744166400` | `n` |
 | Gloas | `1432` | not `n` (grows in subtrees) |
 
-`ValidatorExitDelayVerifier` derives the leaf as `GI_FIRST_VALIDATOR + validatorIndex` and only
-switches `GI_FIRST_VALIDATOR` at a configured `PIVOT_SLOT`. Post-Gloas neither the constant nor the
-arithmetic holds, and the same applies to the historical-summaries index used by
-`verifyHistoricalValidatorExitDelay`. The bot side is fine — it asks SSZ for the gindex and produces
-a valid proof for the new tree — but the contract needs a change before those proofs can be
-submitted. Pinned by `proofs.spec.ts`.
+The Gloas verifier keeps the calls the deployed one takes - `verifyValidatorExitDelay` and
+`verifyHistoricalValidatorExitDelay`, with the proven block anchored through EIP-4788 - and switches
+the layout internally at `GLOAS_SLOT`: before it the leaf is a static-list node under the pre-Gloas
+`validators` index, from it `GI_VALIDATORS.concat(progressiveListNodeGIndex(index))`. Historical
+summaries follow the anchor's layout the same way. So nothing changes in what the bot submits; it
+asks SSZ for every generalized index, and `proofs.spec.ts` checks that the contract's own arithmetic
+lands on the same leaves on both sides of the fork.
+
+The ABI in `src/common/contracts/abi` is built from core `28a9448`. Both verifier versions take the
+same calls, so the bot runs against either until the upgrade is enacted; only the start-up log reads
+a version-specific getter, `GLOAS_SLOT`, falling back to the deployed verifier's `PIVOT_SLOT`.
+
+`test/e2e-verifier` runs proofs built by the bot from a live devnet through that verifier on a fork
+of the devnet, down to the staking module recording the delay - see its README.
 
 ## Dependency
 
