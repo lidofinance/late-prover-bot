@@ -404,10 +404,10 @@
     "@chainsafe/hashtree" "1.0.1"
     "@noble/hashes" "^1.3.0"
 
-"@chainsafe/ssz@^1.6.2":
-  version "1.6.2"
-  resolved "https://registry.npmjs.org/@chainsafe/ssz/-/ssz-1.6.2.tgz#3b0a6c9a1bad566e53a97660b1a4127ae5c58427"
-  integrity sha512-XJELFJBHBstcvyRuXWPmNc/WRWmV5FVV03+iPTpgtCPQaImEHjKU4bc/5me35dRrXpehC04LD4ePYayOUjxFbw==
+"@chainsafe/ssz@^1.8.1":
+  version "1.8.1"
+  resolved "https://registry.npmjs.org/@chainsafe/ssz/-/ssz-1.8.1.tgz#2e2e34c158dfb56c79999eebc1ac6cdbc0b7f684"
+  integrity sha512-Hj0ACi3YQCBtFfUYpv4FZ8vFYl3DuJX29eQd5t70PuR8Z1JoUDX2IY0kHeYyCb2k/13pwV/RAocYQkrNS1mWkQ==
   dependencies:
     "@chainsafe/as-sha256" ""
     "@chainsafe/persistent-merkle-tree" ""
@@ -1226,18 +1226,18 @@
   dependencies:
     call-bind "^1.0.8"
 
-"@lodestar/params@1.46.0", "@lodestar/params@^1.46.0":
-  version "1.46.0"
-  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.46.0.tgz#28282d633145b928ffcd9f940b244c70d5e8ecb9"
-  integrity sha512-eyJrn62yNZr+0KxzSKAtDkxzzMoo9T1Bz2N51mQAamp+eP6gFWPRKwegRc323SCALO41Jb1ELaECane2D7dQzA==
+"@lodestar/params@1.50.0", "@lodestar/params@^1.50.0":
+  version "1.50.0"
+  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.50.0.tgz#e9e1b85941b8207dd0620a5c2552a1687f14b3f2"
+  integrity sha512-6UAo9aih2BARMwDCPmhack+uMckVgeatiCRTajCL4xocHhltdbIXSfk1PdGx4cSmWVuteFaCec36Vg6g7v4b1Q==
 
-"@lodestar/types@1.46.0":
-  version "1.46.0"
-  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.46.0.tgz#5bc0e8c8b3206123b367fc36db91e72169f7f25f"
-  integrity sha512-Ga48V+1MNftO0a3cCS3CSLMpLihohsWAl1jOIFz47Jvz8xFDjXOATXmv+AlxNm4CbwmKLIEBL2e5UH0kRh85vw==
+"@lodestar/types@1.50.0":
+  version "1.50.0"
+  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.50.0.tgz#4e394eee8120f9653334c4b7490193474b62df38"
+  integrity sha512-pikbQ2SI2EBVTXLJKmaZmFz6bYJE9HMlKS310gAofsofDvVxX9iqVgIcJZ2cLqH6DguDRfzOs/oo/1/PfPiDjw==
   dependencies:
-    "@chainsafe/ssz" "^1.6.2"
-    "@lodestar/params" "^1.46.0"
+    "@chainsafe/ssz" "^1.8.1"
+    "@lodestar/params" "^1.50.0"
     ethereum-cryptography "^2.0.0"
 
 "@lukeed/csprng@^1.0.0":

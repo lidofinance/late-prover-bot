@@ -115,9 +115,9 @@ submitted. Pinned by `proofs.spec.ts`.
 
 ## Dependency
 
-`@lodestar/types` is pinned exactly to **1.46.0**, the first release whose Gloas containers hash the
-same way the devnet clients do. The devnet run below used 1.46.0-rc.1; 1.46.0 has the same Gloas
-containers and generalized indices and the same `@chainsafe/ssz`:
+`@lodestar/types` is pinned exactly to **1.50.0**. 1.46.0 is the first release whose Gloas containers
+hash the same way the devnet clients do. The devnet run below used 1.46.0-rc.1; 1.50.0 has the same
+Gloas containers and generalized indices, on `@chainsafe/ssz` 1.8.1:
 
 - 1.34.x aliases `ssz.gloas` to the Fulu containers, so post-fork blocks and states decode with the
   wrong layout, silently.
