@@ -68,9 +68,6 @@ const withAnchors = () =>
   });
 
 describe('RootsProcessor.process', () => {
-  // The EL anchor of a CL block is fork-dependent (embedded payload before EIP-7732, payload bid
-  // after), which is why it is resolved by the consensus provider - the daemon only turns the
-  // resulting hashes into the block range to scan for exit requests.
   it('scans the EL range between the anchors of the two CL blocks', async () => {
     const { service, prover } = withAnchors();
 

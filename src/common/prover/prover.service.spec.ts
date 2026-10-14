@@ -300,7 +300,6 @@ const makeAnchorService = ({
     return { root: rootOf(slot), header: { message: { slot: String(slot) } } };
   });
 
-  // The forward scan lives on the consensus provider; this is the same 404-skipping behaviour
   const findNextAvailableHeader = jest.fn(async (startSlot: number) => {
     let slot = startSlot;
     while (missed.includes(slot)) slot++;
@@ -459,8 +458,6 @@ describe('ProverService.processDeadlineSlot', () => {
 
 // ─── resolveLookbackFromBlock — START_LOOKBACK_DAYS window ────────────────────
 
-// From Gloas on there is no fixed number of execution blocks per slot, so the window start has to be
-// derived through the consensus layer instead of counting 12-second blocks backwards.
 describe('ProverService.resolveLookbackFromBlock', () => {
   const NOW_SLOT = 400_000;
   const CURRENT_BLOCK = 300_000;

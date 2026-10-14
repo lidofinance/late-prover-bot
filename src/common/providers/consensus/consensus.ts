@@ -38,10 +38,8 @@ export interface State {
 const MAX_SLOTS_SCANNED_FORWARD = 32;
 
 /**
- * The two block body fields this service reads. Every fork carries exactly one of them: the
- * embedded payload up to Fulu, the bid for the separately revealed payload from Gloas (EIP-7732)
- * on. `SupportedBlock` is a union of per-fork containers with no discriminant to narrow on, hence
- * the cast.
+ * The block body fields this service reads: the payload up to Fulu, the bid from Gloas on.
+ * `SupportedBlock` has no discriminant to narrow on, hence the cast.
  */
 interface BlockBodyFields {
   executionPayload?: { blockHash: Uint8Array };
@@ -139,8 +137,6 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
 
   /**
    * Find the next proposed (non-missed) slot at or after `startSlot` and return its header.
-   *
-   * The beacon chain can have missed slots where no block was proposed.
    */
   public async findNextAvailableHeader(
     startSlot: number,
@@ -152,7 +148,6 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const header = await this.getBeaconHeader(currentSlot.toString());
-        // Successfully got header - this slot has a block
         this.logger.log(
           `Found available slot ${currentSlot}` +
             (currentSlot !== startSlot ? ` (requested: ${startSlot}, missed: ${currentSlot - startSlot})` : ''),
@@ -179,17 +174,10 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
   /**
    * The execution block the given beacon block is anchored on - the EL head as of that CL block.
    *
-   * Before EIP-7732 the block embeds the very payload it was built with. From Gloas on the payload
-   * is revealed separately and only reaches the beacon state while the *next* block is processed,
-   * so a block's execution anchor is `state.latest_block_hash` of its own post state. The block
-   * body carries that value for free: `process_execution_payload_bid` asserts
-   * `bid.parent_block_hash == state.latest_block_hash`, and nothing else in the block changes that
-   * field afterwards. Reading the bid avoids downloading a multi-gigabyte beacon state per cycle.
-   *
-   * Post-fork the anchor therefore lags the block by one slot - it is the payload of the parent
-   * slot, or an earlier one when payloads were withheld. That is the safe direction for the
-   * daemon's log scan range: the range ends short, and since both ends of the range are resolved by
-   * the same rule the remainder is picked up by the next cycle instead of being skipped.
+   * Before EIP-7732 it is the embedded payload. From Gloas on it is `state.latest_block_hash`, which
+   * `process_execution_payload_bid` asserts equal to `bid.parent_block_hash`, so it is read from the
+   * body instead of the state. The anchor then lags the block by a slot or more, which only makes a
+   * scan range end short; the next cycle picks up the rest.
    */
   public async getExecutionBlockHash(header: BlockHeaderResponse): Promise<string> {
     const { block } = await this.getBlockInfo(header.root);

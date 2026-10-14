@@ -49,7 +49,7 @@ export class RootsProcessor {
         slot: Number(latest.header.message.slot),
       });
     } catch (error) {
-      // Waiting for the chain is the daemon's business to report, once, without a stack trace
+      // The daemon reports waiting for the chain itself, once
       if (!(error instanceof ChainNotReadyError)) {
         this.logger.error(`Failed to process root [${prev.root}]`, serializeError(error));
       }

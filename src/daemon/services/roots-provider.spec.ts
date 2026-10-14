@@ -91,8 +91,7 @@ describe('RootsProvider.getRoots', () => {
     expect(roots?.prev.root).toBe(`0xroot${LOOKBACK_SLOT}`);
   });
 
-  // Asking for a missed slot 404s. Before the forward scan that returned no previous root at all, so
-  // the daemon would idle cycle after cycle - and missed slots are common on an ePBS chain.
+  // A missed lookback slot 404s, so the provider has to scan forward
   it('scans forward when the lookback slot was never proposed', async () => {
     const { service } = makeService({ missed: [LOOKBACK_SLOT, LOOKBACK_SLOT + 1, LOOKBACK_SLOT + 2] });
 

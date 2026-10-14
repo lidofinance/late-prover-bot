@@ -130,15 +130,9 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * The execution block the lookback window starts at.
-   *
-   * Counting back `days * 86400 / 12` execution blocks assumes one execution block per slot. There is
-   * at most one, never more, so the window always reaches *further* back than configured, and the
-   * gap grows with the share of slots that produce no execution block - missed slots, and from Gloas
-   * on also proposed blocks whose payload was withheld. Measured on a Gloas devnet: for a one-day
-   * window the naive count started ~12 h too early. Walk the consensus layer instead - timestamp to
-   * slot, slot to its execution anchor - so the window is exactly as long as configured and does not
-   * drift with payload availability.
+   * The execution block the lookback window starts at, resolved through the CL (timestamp to slot
+   * to execution anchor). Counting `days * 86400 / 12` blocks back would start too early, since a
+   * slot can produce no execution block.
    */
   private async resolveLookbackFromBlock(daysToLookBack: number, currentBlock: number): Promise<number> {
     const lookbackTimestamp = Math.floor(Date.now() / 1000) - daysToLookBack * 24 * 60 * 60;

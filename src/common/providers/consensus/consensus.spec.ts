@@ -60,10 +60,7 @@ describe('Consensus.getExecutionBlockHash', () => {
     expect(blockHash).toBe(hex(0x11));
   });
 
-  // After EIP-7732 the block only bids for a payload that is revealed later. The execution block
-  // the CL block is anchored on is the one already settled in its state - `state.latest_block_hash`,
-  // which the bid commits to as `parent_block_hash`. The block's own `bid.block_hash` is a promise
-  // about a payload that may never be revealed, so it must not be used.
+  // `bid.block_hash` is a payload that may never be revealed, so it must not be the anchor
   it('reads the bid parent block hash from Gloas on, not the bid block hash', async () => {
     const consensus = makeConsensus();
     const block = ssz.gloas.BeaconBlock.defaultValue();

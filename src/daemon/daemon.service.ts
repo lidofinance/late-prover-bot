@@ -201,9 +201,7 @@ export class DaemonService implements OnModuleInit {
           `\n  Processing time: ${Date.now() - baseRunStartTime}ms`,
       );
     } catch (error) {
-      // The chain simply is not ready for this transition yet (EL behind, anchor pruned or not yet
-      // created). Keep the last processed root untouched and retry the same transition next cycle -
-      // no stack trace, no error-recovery path.
+      // Not a failure: keep the last processed root and retry the same transition next cycle
       if (error instanceof ChainNotReadyError) {
         this.logger.warn(`💤 Chain is not ready to be processed yet: ${error.message}`);
 

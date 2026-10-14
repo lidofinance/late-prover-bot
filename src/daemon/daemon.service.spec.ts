@@ -46,8 +46,6 @@ describe('DaemonService.baseRun', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  // Waiting is not a completed cycle: bumping the success timestamp here would make a bot stuck
-  // for hours indistinguishable from a healthy idle one.
   it('does not mark the cycle successful when there are no roots to work with', async () => {
     const { service, logger, prometheus } = makeService({ roots: undefined });
 

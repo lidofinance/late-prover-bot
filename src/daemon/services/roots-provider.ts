@@ -80,9 +80,7 @@ export class RootsProvider {
     const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
 
     try {
-      // Scan forward: the lookback slot itself may never have been proposed, and asking for a missed
-      // slot 404s. On a chain with frequent missed slots that would leave the daemon without a
-      // starting root cycle after cycle.
+      // The lookback slot may have been missed, and a missed slot 404s
       const { slot, header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
       if (header) {
         this.logger.log(

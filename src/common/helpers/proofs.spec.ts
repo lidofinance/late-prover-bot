@@ -31,9 +31,6 @@ describe('generateValidatorProof', () => {
     ssz = await importSsz();
   });
 
-  // The bot builds the proof, the ValidatorExitDelayVerifier contract checks it against the state
-  // root of a beacon block header. This is the round trip, run against the same @chainsafe/ssz and
-  // @chainsafe/persistent-merkle-tree versions the daemon runs on.
   it.each(['electra', 'fulu', 'gloas'])('produces a proof that verifies against the %s state root', (fork) => {
     const state = makeStateWithValidators(ssz, fork, 4);
     const validatorIndex = 2;
@@ -50,11 +47,8 @@ describe('generateValidatorProof', () => {
     ).not.toThrow();
   });
 
-  // Gloas turns the state into a progressive container and `validators` into a progressive list
-  // (EIP-7916), which re-merkleizes the registry. `ValidatorExitDelayVerifier` derives the leaf
-  // index as GI_FIRST_VALIDATOR + validatorIndex and only switches GI_FIRST_VALIDATOR at a
-  // configured PIVOT_SLOT; neither the constant nor the arithmetic survives the fork, so the
-  // contract needs work before proofs can be submitted post-Gloas. This test pins that fact.
+  // EIP-7916 re-merkleizes the registry, so the verifier's GI_FIRST_VALIDATOR + validatorIndex
+  // no longer holds after Gloas. The contract has to change before Gloas proofs can be submitted.
   it('changes the validator generalized index in Gloas, and it is no longer linear in the index', () => {
     const gindexOf = (fork: string, index: number) => ssz[fork].BeaconState.getPathInfo(['validators', index]).gindex;
 

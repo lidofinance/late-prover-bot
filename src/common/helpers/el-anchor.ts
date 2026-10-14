@@ -2,7 +2,6 @@ import { ChainNotReadyError } from '../errors/chain-not-ready.error';
 import { Consensus } from '../providers/consensus/consensus';
 import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 
-/** The bit of an execution provider needed to turn a block hash into a block number. */
 interface BlockNumberSource {
   getBlock(blockHashOrNumber: string): Promise<{ number: number } | null>;
 }
@@ -14,11 +13,8 @@ interface BlockNumberSource {
 export const EARLIEST_ANCHORABLE_SLOT = 1;
 
 /**
- * The execution block number a consensus block is anchored on.
- *
- * From Gloas on there is no longer one execution block per slot - a proposed block whose payload was
- * withheld adds none - so an execution block number can only be derived through the anchor of a
- * specific consensus block, never by counting slots. See {@link Consensus.getExecutionBlockHash}.
+ * The execution block number a consensus block is anchored on. From Gloas on a slot can add no
+ * execution block, so block numbers cannot be derived by counting slots.
  */
 export async function resolveElBlockNumber(
   consensus: Consensus,
@@ -28,8 +24,6 @@ export async function resolveElBlockNumber(
   const blockHash = await consensus.getExecutionBlockHash(header);
   const block = await provider.getBlock(blockHash);
   if (!block) {
-    // Not a failure of ours: the EL is behind, has pruned the block, or the anchor does not exist
-    // yet. The daemon waits for the next cycle instead of erroring out.
     throw new ChainNotReadyError(
       `Execution block [${blockHash}] anchored at slot [${header.header.message.slot}] is unknown to the EL node`,
     );
