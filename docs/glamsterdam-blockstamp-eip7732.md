@@ -51,8 +51,10 @@ Two things leave the ring buffer without an entry, and both revert with `RootNot
    *its own* parent, not to ours, so our anchor's root is never written and stays unreachable. The
    anchor itself has to move forward onto that block, and the search repeats.
 
-Whether the payload of a block was revealed is decided from the next block's bid: it must commit to
-`state.latest_block_hash`, which equals this block's payload hash only if the payload was applied.
+The bot does not infer which of these happened. It asks the predeploy with the same call the
+verifier makes, and moves the anchor forward until the entry is there. Only a recent deadline needs
+that: an old one is proven through the historical summaries of the finalized anchor, whose own entry
+is confirmed the same way, and needs no entry of its own.
 
 Moving the anchor forward is safe for an exit-delay proof: it proves the validator had still not
 exited at a *later* slot, which only increases the delay the verifier computes, and the validator
