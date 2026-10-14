@@ -1,4 +1,6 @@
 import { ProverService } from './prover.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
+import { EARLIEST_ANCHORABLE_SLOT } from '../helpers/el-anchor';
 import { RequestError } from '../providers/base/rest-provider';
 
 // Minimal prometheus mock covering every counter/timer used in processValidator
@@ -271,6 +273,11 @@ const NEXT_PROPOSED_SLOT = 3624535;
 
 const rootOf = (slot: number) => `0xroot${slot}`;
 
+const makeHeader = (slot: number) => ({
+  root: rootOf(slot),
+  header: { message: { slot: slot.toString(), proposer_index: '1', parent_root: rootOf(slot - 1) } },
+});
+
 /** EIP-4788 HISTORY_BUFFER_LENGTH */
 const HISTORY_BUFFER_LENGTH = 8191;
 
@@ -293,6 +300,12 @@ const makeAnchorService = ({
     return { root: rootOf(slot), header: { message: { slot: String(slot) } } };
   });
 
+  const findNextAvailableHeader = jest.fn(async (startSlot: number) => {
+    let slot = startSlot;
+    while (missed.includes(slot)) slot++;
+    return { slot, header: await getBeaconHeader(slot.toString()) };
+  });
+
   // The execution block of slot W stores the root of W's parent under ts(W)
   const call = jest.fn(async ({ data }: { to: string; data: string }) => {
     const timestamp = Number(BigInt(data));
@@ -310,6 +323,7 @@ const makeAnchorService = ({
       beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT, SLOTS_PER_HISTORICAL_ROOT: '8192' },
       slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
       getBeaconHeader,
+      findNextAvailableHeader,
     },
     execution: { provider: { call } },
   });
@@ -439,5 +453,106 @@ describe('ProverService.processDeadlineSlot', () => {
       rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
     });
     expect(call).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── resolveLookbackFromBlock — START_LOOKBACK_DAYS window ────────────────────
+
+describe('ProverService.resolveLookbackFromBlock', () => {
+  const NOW_SLOT = 400_000;
+  const CURRENT_BLOCK = 300_000;
+
+  const makeLookbackService = ({ missed = [] as number[], anchors = {} as Record<number, number> } = {}) => {
+    const nextProposed = (slot: number) => {
+      let current = slot;
+      while (missed.includes(current)) current++;
+      return current;
+    };
+
+    return makeService({
+      consensus: {
+        timestampToSlot: (ts: number) => Math.floor((ts - HOODI_GENESIS) / SECONDS_PER_SLOT),
+        genesisTimestamp: HOODI_GENESIS,
+        findNextAvailableHeader: jest.fn(async (startSlot: number) => {
+          const slot = nextProposed(startSlot);
+          return { slot, header: makeHeader(slot) };
+        }),
+        getExecutionBlockHash: jest.fn(async (header: any) => `0xel${header.header.message.slot}`),
+      },
+      execution: {
+        provider: {
+          getBlock: jest.fn(async (hash: string) => {
+            const slot = Number(hash.replace('0xel', ''));
+            return anchors[slot] === undefined ? null : { number: anchors[slot] };
+          }),
+        },
+      },
+    });
+  };
+
+  beforeAll(() => {
+    // Freeze time so the lookback timestamp maps to a known slot
+    jest.useFakeTimers().setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
+  it('derives the first block of the window from the execution anchor of the lookback slot', async () => {
+    // 7 days back = 50400 slots
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({ anchors: { [lookbackSlot]: 111_222 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_222);
+    // Not the naive `currentBlock - days * 86400 / 12`, which assumes a block per slot
+    expect(fromBlock).not.toBe(CURRENT_BLOCK - 50_400);
+  });
+
+  it('scans forward when the lookback slot itself was never proposed', async () => {
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({
+      missed: [lookbackSlot, lookbackSlot + 1],
+      anchors: { [lookbackSlot + 2]: 111_230 },
+    });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_230);
+  });
+
+  it('never starts the window past the current block', async () => {
+    const service = makeLookbackService({ anchors: { [NOW_SLOT]: CURRENT_BLOCK + 50 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(0, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(CURRENT_BLOCK);
+  });
+
+  // On a chain younger than the window the computed slot is negative. Slot 0 is not a way out
+  // either: the genesis block anchors on a zero execution block hash the EL cannot resolve.
+  it('starts the window at the first anchorable slot on a chain younger than the window', async () => {
+    const service = makeLookbackService({ anchors: { [EARLIEST_ANCHORABLE_SLOT]: 1 } });
+    const consensus = (service as any).consensus;
+    jest.setSystemTime((HOODI_GENESIS + 25_000 * SECONDS_PER_SLOT) * 1000);
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(consensus.findNextAvailableHeader).toHaveBeenCalledWith(EARLIEST_ANCHORABLE_SLOT);
+    expect(fromBlock).toBe(1);
+
+    jest.setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
+  });
+
+  // Typed so the daemon can hold its state and wait instead of treating it as a failure
+  it('reports an unknown anchor as the chain not being ready', async () => {
+    const service = makeLookbackService({ anchors: {} });
+
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(ChainNotReadyError);
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(
+      'is unknown to the EL node',
+    );
   });
 });
