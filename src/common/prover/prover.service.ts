@@ -821,13 +821,14 @@ export class ProverService implements OnModuleInit {
 
     // Which block the validators are proven at depends on how the deployed verifier reaches it.
     //
-    // Taking a block roots witness, it is reached from the recent block's state, so it needs no
-    // beacon roots entry of its own and the first proposed block at or after the deadline always
-    // works. Anchoring it through EIP-4788 itself, its root has to be in the ring buffer, which is
-    // what resolveProvableAnchor confirms - moving the block forward when it is not.
-    const target = blockRootsWitness
-      ? await this.consensus.findNextAvailableHeader(deadlineSlot)
-      : await this.resolveProvableAnchor(deadlineSlot);
+    // Taking a block roots witness, it is reached from the recent block's state, and an old block is
+    // reached through the recent block's historical summaries - neither needs a beacon roots entry
+    // of its own, so the first proposed block at or after the deadline always works. Only a recent
+    // block anchored through EIP-4788 itself needs its root in the ring buffer, which is what
+    // resolveProvableAnchor confirms - moving the block forward when it is not.
+    const isOldForLegacy = !blockRootsWitness && (await this.isSlotOld(deadlineSlot));
+    const anchor = blockRootsWitness || isOldForLegacy ? undefined : await this.resolveProvableAnchor(deadlineSlot);
+    const target: TargetBlock = anchor ?? (await this.consensus.findNextAvailableHeader(deadlineSlot));
     const actualSlot = target.slot;
     const targetHeader = target.header;
 
@@ -841,10 +842,8 @@ export class ProverService implements OnModuleInit {
     }
 
     // The block roots ring is bounded by the same window the historical path takes over at. Without
-    // a witness the proven block is the anchor, and how old it may be is the head-relative check.
-    const isOldSlot = blockRootsWitness
-      ? recentSlot - actualSlot > slotsPerHistoricalRoot
-      : await this.isSlotOld(actualSlot);
+    // a witness how old the proven block may be is the head-relative check.
+    const isOldSlot = blockRootsWitness ? recentSlot - actualSlot > slotsPerHistoricalRoot : isOldForLegacy;
 
     // Use the target slot - the slot the validator state is proven at - for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
@@ -857,7 +856,7 @@ export class ProverService implements OnModuleInit {
         bodyRoot: targetHeader.header.message.body_root,
       },
       // Only the pre-Gloas verifier reads this: it looks the proven block's own root up in EIP-4788
-      ...(blockRootsWitness ? {} : { rootsTimestamp: (target as ProvableAnchor).rootsTimestamp }),
+      ...(anchor ? { rootsTimestamp: anchor.rootsTimestamp } : {}),
     };
 
     // Process all combined validators for this deadline slot
