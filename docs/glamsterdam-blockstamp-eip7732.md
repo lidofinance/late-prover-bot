@@ -56,18 +56,20 @@ verifier makes, and moves the anchor forward until the entry is there. Only a re
 that: an old one is proven through the historical summaries of the finalized anchor, whose own entry
 is confirmed the same way, and needs no entry of its own.
 
-Moving the anchor forward is safe for an exit-delay proof: it proves the validator had still not
-exited at a *later* slot, which only increases the delay the verifier computes, and the validator
-state is read at that same later slot.
+This applies to the **recent** block a submission is anchored on — the finalized block whose state
+also carries the `block_roots` ring and the historical summaries. Moving that anchor forward is
+harmless: it changes neither the delay the verifier computes nor the block the validators are proven
+at, both of which come from the target block (see section 4). The cost is that the anchor may sit a
+slot or two ahead of finalization, where a reorg would make the submission revert.
 
 ## What does not change
 
-- **Deadline math.** `eligibleExitRequestTimestamp`, the shard committee period, the exit deadline
-  threshold and the resulting deadline slot/epoch are pure consensus-layer quantities. EIP-7732 does
-  not touch validator records, so the deadline is still computed and proven the same way. In
-  particular the proof anchor is **not** shifted to the child block the way `lido-oracle` shifts its
-  reference blockstamp — the oracle does that because it needs EL-derived data (block hash, deposits,
-  withdrawals) to be settled, while this bot only needs the validator registry.
+**Deadline math.** `eligibleExitRequestTimestamp`, the shard committee period, the exit deadline
+threshold and the resulting deadline slot/epoch are pure consensus-layer quantities. EIP-7732 does
+not touch validator records, so the deadline is still computed and proven the same way. In particular
+the block the validators are proven at is **not** shifted to the child block the way `lido-oracle`
+shifts its reference blockstamp — the oracle does that because it needs EL-derived data (block hash,
+deposits, withdrawals) to be settled, while this bot only needs the validator registry.
 
 ## 3. No fixed number of execution blocks per slot
 
@@ -98,7 +100,33 @@ Left as is, deliberately:
   node may simply not have imported the block yet and the retry is what saves the cycle. On a chain
   with many missed slots this shows up as log noise during anchor resolution; it is not a failure.
 
-## Open blocker: the verifier contract cannot verify Gloas proofs yet
+## 4. The verifier's Gloas shape (lidofinance/core#1940)
+
+The Gloas verifier does not anchor the deadline block through EIP-4788 any more:
+
+```solidity
+verifyValidatorExitDelay(
+    ProvableBeaconBlockHeader recentBlock,   // root read from EIP-4788
+    BlockRootsHeaderWitness  targetBlock,    // proven against recentBlock.header.stateRoot
+    ValidatorWitness[]       witnesses,      // proven against targetBlock.header.stateRoot
+    ExitRequestData          exitRequests)
+```
+
+That resolves the withheld-payload problem for the deadline block outright: its root is read out of
+the recent state's `block_roots` ring, so it no longer matters whether an execution block carried its
+successor's timestamp. Only the recent block still needs an entry in the beacon roots buffer, which
+is what `resolveProvableAnchor` guarantees for the finalized anchor.
+
+Consequences for the bot:
+
+- the deadline block is simply the first proposed block at or after the deadline - no forward walk;
+- `proofSlotTimestamp` comes from the target block, so moving it would change the reported delay;
+- the current-slot path is bounded by `recentSlot - targetSlot <= SLOTS_PER_HISTORICAL_ROOT`, the
+  size of the ring, which is exactly where the historical-summaries path takes over;
+- a deadline that is not yet behind the finalized anchor waits for the next cycle rather than being
+  proven against a state that cannot contain it.
+
+## Progressive SSZ lists (EIP-7916)
 
 Glamsterdam also brings **EIP-7916 progressive SSZ lists**. In the current spec `BeaconState` is a
 `ProgressiveContainer` and `Validators` is a `ProgressiveList`, which re-merkleizes the registry:
@@ -108,12 +136,12 @@ Glamsterdam also brings **EIP-7916 progressive SSZ lists**. In the current spec 
 | Electra / Fulu | `164926744166400` | `n` |
 | Gloas | `1432` | not `n` (grows in subtrees) |
 
-`ValidatorExitDelayVerifier` derives the leaf as `GI_FIRST_VALIDATOR + validatorIndex` and only
-switches `GI_FIRST_VALIDATOR` at a configured `PIVOT_SLOT`. Post-Gloas neither the constant nor the
-arithmetic holds, and the same applies to the historical-summaries index used by
-`verifyHistoricalValidatorExitDelay`. The bot side is fine — it asks SSZ for the gindex and produces
-a valid proof for the new tree — but the contract needs a change before those proofs can be
-submitted. Pinned by `proofs.spec.ts`.
+The verifier in lidofinance/core#1940 handles this: post-pivot it derives the leaf as
+`GI_VALIDATORS.concat(progressiveListNodeGIndex(index))` instead of `GI_FIRST_VALIDATOR + index`.
+Verified against a live devnet - the contract's index matches the one SSZ computes off the real
+state, and a proof built by this bot is accepted end to end, down to the module recording the delay.
+The bot side needs no arithmetic of its own: it asks SSZ for the generalized index. `proofs.spec.ts`
+pins the difference between the forks.
 
 ## Dependency
 

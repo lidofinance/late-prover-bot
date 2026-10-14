@@ -24,6 +24,19 @@ export function generateValidatorProof(stateView: SupportedStateView, valIndex: 
 }
 
 /**
+ * Prove that `blockRoots[rootIndex]` is part of the given state.
+ *
+ * `block_roots` is the state's ring buffer of the last SLOTS_PER_HISTORICAL_ROOT block roots, so a
+ * recent state proves the root of any block within that window without the historical summaries
+ * detour - and, unlike EIP-4788, without depending on whether an execution block carried that slot's
+ * timestamp.
+ */
+export function generateBlockRootsProof(stateView: SupportedStateView, rootIndex: number): SingleProof {
+  const gI = stateView.type.getPathInfo(['blockRoots', rootIndex]).gindex;
+  return createProof(stateView.node, { type: ProofType.single, gindex: gI }) as SingleProof;
+}
+
+/**
  * generateHistoricalStateProof
  *
  * Construct a Merkle proof that a given `blockRoot` (from a historical summary)
