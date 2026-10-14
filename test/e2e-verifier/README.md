@@ -1,70 +1,66 @@
-# End-to-end: a proof from this bot through the Gloas verifier
+# End-to-end: proofs from this bot through the Gloas verifier
 
-Runs a proof built by this bot's own code, from a live Gloas devnet, through
-`ValidatorExitDelayVerifier` as it exists in [lidofinance/core#1940](https://github.com/lidofinance/core/pull/1940),
-on a fork of that devnet's execution layer.
+Runs proofs built by this bot's own code, from a live Gloas devnet, through `ValidatorExitDelayVerifier`
+from [lidofinance/core#1940](https://github.com/lidofinance/core/pull/1940), on a fork of that devnet's
+execution layer.
 
 ```bash
 CL_API_URLS=<cl> EL_API_URL=<el> LIDO_LOCATOR=<addr> ./test/e2e-verifier/run.sh
 ```
 
-The script needs a `lido/core` checkout (`CORE_REPO`, default `../core`) to take the contract from
-(`CORE_REF`, default `origin/gloas-verifier`) and `forge` on PATH. It works in a temporary git
-worktree and removes it afterwards, so the core checkout is left untouched. `FIXTURE=<path>` reuses a
-fixture instead of regenerating one.
+The script needs a `lido/core` checkout (`CORE_REPO`, default `../core`) holding `CORE_REF` and `forge` on
+PATH. It works in a temporary git worktree and removes it afterwards, so the core checkout is left
+untouched.
 
-## What is real
+| Variable | Default | |
+|---|---|---|
+| `CORE_REF` | `28a94485ffdf09e09e7b46f7cfb7b59ad3228e35` | The core#1940 head the ABI in `src/common/contracts/abi` is built from. Move both together. |
+| `FIXTURE` | regenerated | Reuse a fixture instead of building one from the devnet. |
+| `ETCH` | `true` | `false` runs the full calls against the verifier already deployed on the devnet. |
 
-Everything the proof is made of comes off the chain:
+## What is proven
 
-- `recent` — a finalized block whose root the generator **reads back from the EIP-4788 predeploy** at
-  the `rootsTimestamp` it computed, so a stale fixture fails at generation time instead of passing
-  silently on chain;
-- `target` — an older block, proven against `recent.header.stateRoot` through `state.block_roots`;
-- `validator` — a Lido key of module 1 / operator 0 that is actually deposited on that devnet, proven
-  against `target.header.stateRoot`;
-- `exitRequests` — a `dataFormat = 2` blob for that key, unpacked by the **real** VEB on the fork;
-- the report lands in the real `StakingRouter` and `NodeOperatorsRegistry`, which records the delay.
+The fixture (`scripts/devnet-proof-fixture.ts`) makes every proof with the bot's own helpers, the way the
+prover makes it:
 
-## What is faked, and why
+- `current` — a recent Gloas block whose root is **read back from the EIP-4788 predeploy**, and a Lido
+  validator proven against its state: the `verifyValidatorExitDelay` path;
+- `historical` — an older Gloas block proven through the historical summaries of the finalized anchor,
+  and the same validator proven against the old state: the `verifyHistoricalValidatorExitDelay` path;
+- `historicalPreGloas` — a block from before the fork proven from the Gloas anchor, where the verifier
+  takes the summary index from one layout and the validator index from the other. Proof-level only:
+  Lido keys may not exist that early.
 
-Both are deliberate and neither is Gloas-specific:
+`gloasVerifierDevnet.t.sol` needs no fork. It checks that the generalized indices the contract derives
+equal the ones SSZ computed off the real states, and that every proof verifies under them.
 
-1. **The upgrade is not a real upgrade.** The new verifier is deployed and its runtime code is
-   `vm.etch`ed onto the address `LidoLocator` already points at, because `StakingRouter` grants
-   `REPORT_VALIDATOR_EXITING_STATUS_ROLE` to exactly that address and the verifier keeps all of its
-   configuration in immutables, which live in runtime code. The governance/proxy path an actual
-   upgrade would take is **not** covered here.
+`gloasVerifierDevnetFork.t.sol` makes both full calls on the fork and asserts that the staking module
+recorded the delay for the proven key, plus a negative case for each: a wrong `rootsTimestamp` and an
+old block claimed at the wrong slot.
+
+## What is arranged
+
+Neither is Gloas-specific:
+
+1. **The upgrade is not a real upgrade.** With `ETCH` the verifier built from `CORE_REF` is `vm.etch`ed
+   onto the address `LidoLocator` points at, because `StakingRouter` grants
+   `REPORT_VALIDATOR_EXITING_STATUS_ROLE` to exactly that address and the verifier keeps its
+   configuration in immutables. The governance path an actual upgrade would take is not covered.
 2. **`IValidatorsExitBus.getDeliveryTimestamp` is mocked** to a moment before the validator became
-   eligible to exit. A fork cannot be made to have submitted an exit request in its own past. The
-   delay that gets reported is still derived from chain data, since the contract takes
-   `max(delivered, activationEligible)`.
-
-## The two suites
-
-`gloasVerifierDevnet.t.sol` — no fork needed. Checks that the generalized indices the contract derives
-equal the ones SSZ computed off the real Gloas state, and that both proofs verify. This is the part
-EIP-7916 makes worth pinning: `Validators` is a progressive list, so the leaf index is no longer
-`GI_FIRST_VALIDATOR + validatorIndex` and is not even linear in the index.
-
-`gloasVerifierDevnetFork.t.sol` — the whole call on the fork, asserting the module recorded the delay
-for the proven key, plus a negative case where the target block's slot is shifted by one.
+   eligible to exit, since a fork cannot have submitted an exit request in its own past. The reported
+   delay is still derived from chain data.
 
 ## Last run
 
-`glamsterdam-kurtosis-7` (Lighthouse v8.2.0 / Besu, `GLOAS_FORK_EPOCH=3`), core at
-`origin/gloas-verifier`, 7/7 green:
+`lido-gloas-csn-1` (Lighthouse v8.3.0-rc.0 / Geth v1.17.7, `GLOAS_FORK_EPOCH=113`), core at `28a9448`,
+10/10 green both with `ETCH=true` and against the verifier deployed there:
 
 ```
-recent slot 180064 (rootsTimestamp 1786460801, verified against EIP-4788)
-target slot 180000 (block_roots[7968])
-validator 385 0x92f46b0dcc7db24f
-
-emit ValidatorExitStatusUpdated(nodeOperatorId: 0,
-  publicKey: 0x92f46b0dcc7db24f...,
-  eligibleToExitInSec: 2011776,     # from activation epoch 130 + shard committee period
-  proofSlotTimestamp: 1786460021)   # target slot 180000
+current: slot 36288, rootsTimestamp 1791986231
+anchor: slot 36351, rootsTimestamp 1791986987
+historical: slot 28672 (Gloas), slot 3552 (pre-Gloas, fork at 3616)
+validator: 0x9948ea3862b88896 (key 3 of module 1)
 ```
 
-The committed `fixture.json` is from that run. Regenerate it whenever the devnet, the spec or the
-client versions move — a fixture older than the EIP-4788 ring buffer (~27 h) will fail at generation.
+The committed `fixture.json` is from that run. Regenerate it whenever the devnet, the spec or the client
+versions move; a fixture older than the EIP-4788 ring buffer (~27 h) fails on the fork.
