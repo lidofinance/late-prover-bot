@@ -1,38 +1,38 @@
 /**
- * Build a ValidatorExitDelayVerifier proof fixture from a live Gloas devnet.
+ * Build ValidatorExitDelayVerifier proof fixtures from a live Gloas devnet.
  *
- * Produces everything the contract needs for `verifyValidatorExitDelay`, taken from real chain data:
- * a recent block anchored through EIP-4788, the target block proven against that block's
- * `state.block_roots`, and a validator proven against the target block's state. The generalized
- * indices SSZ used are written alongside so the contract's own derivation can be compared to them.
+ * Every proof is made by the bot's own helpers from real chain data, the way the prover makes it:
+ *   - current: a recent block whose root is read back from the EIP-4788 predeploy, and a validator
+ *     proven against that block's state (`verifyValidatorExitDelay`);
+ *   - historical: an older Gloas block proven through the historical summaries of a finalized
+ *     anchor, and a validator proven against the old block's state
+ *     (`verifyHistoricalValidatorExitDelay`);
+ *   - historicalPreGloas: the same for a block from before the fork, proven from a Gloas state -
+ *     the case where the verifier switches layouts between the anchor and the proven block.
  *
  * Usage:
- *   CL_API_URLS=<cl> EL_API_URL=<el> LIDO_LOCATOR=<addr> \
- *     npx ts-node -r tsconfig-paths/register scripts/devnet-proof-fixture.ts [out.json]
+ *   TS_NODE_COMPILER_OPTIONS='{"esModuleInterop":true}' CL_API_URLS=<cl> EL_API_URL=<el> \
+ *     LIDO_LOCATOR=<addr> npx ts-node -r tsconfig-paths/register scripts/devnet-proof-fixture.ts [out.json]
  */
 import { writeFileSync } from 'node:fs';
 
 import { ethers } from 'ethers';
 
 import { WorkingMode } from '../src/common/config/env.validation';
-import { generateBlockRootsProof, generateValidatorProof, toHex, verifyProof } from '../src/common/helpers/proofs';
+import { generateHistoricalStateProof, generateValidatorProof, toHex, verifyProof } from '../src/common/helpers/proofs';
 import { Consensus } from '../src/common/providers/consensus/consensus';
 
 const CL_URL = process.env.CL_API_URLS as string;
 const EL_URL = process.env.EL_API_URL as string;
 const LOCATOR = process.env.LIDO_LOCATOR as string;
 const OUT = process.argv[2] ?? 'devnet-proof-fixture.json';
-/** How far behind the recent block the proven (deadline) block sits */
-const TARGET_LAG_SLOTS = Number(process.env.TARGET_LAG_SLOTS ?? 64);
+const BEACON_ROOTS = '0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02';
+/** How far behind finalization the block proven through EIP-4788 sits */
+const CURRENT_LAG_SLOTS = 64;
 
 const FAR_FUTURE_EPOCH = '18446744073709551615';
 
-const logger = {
-  log: () => undefined,
-  warn: () => undefined,
-  error: console.error,
-  debug: () => undefined,
-};
+const logger = { log: () => undefined, warn: () => undefined, error: console.error, debug: () => undefined };
 
 const config = {
   get: (key: string) =>
@@ -54,9 +54,6 @@ const headerFields = (header: any) => ({
   bodyRoot: header.header.message.body_root,
 });
 
-/** GIndex.sol packs a generalized index and the tree level power into one word */
-const packGIndex = (gindex: bigint, pow: number) => ethers.utils.hexZeroPad('0x' + ((gindex << 8n) | BigInt(pow)).toString(16), 32);
-
 async function main() {
   const consensus = new (Consensus as any)(logger, {}, config) as Consensus & { [k: string]: any };
   await consensus.onModuleInit();
@@ -64,134 +61,38 @@ async function main() {
   const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
   const slotsPerHistoricalRoot = Number(consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
-  const secondsPerSlot = Number(consensus.beaconConfig.SECONDS_PER_SLOT);
-  const gloasForkSlot = consensus.epochToSlot(Number((consensus.beaconConfig as any).GLOAS_FORK_EPOCH));
+  const capellaSlot = consensus.epochToSlot(Number(consensus.beaconConfig.CAPELLA_FORK_EPOCH));
+  const gloasSlot = consensus.epochToSlot(Number((consensus.beaconConfig as any).GLOAS_FORK_EPOCH));
 
-  // ── the recent block: its root has to be readable through EIP-4788 ─────────
-  const finalized = await consensus.getBeaconHeader('finalized');
-  const recentSlot = Number(finalized.header.message.slot);
-  const { slot: writerSlot } = await consensus.findNextAvailableHeader(recentSlot + 1);
-  const rootsTimestamp = consensus.slotToTimestamp(writerSlot);
+  const stateViewAt = async (slot: number) => {
+    const state = await consensus.getState(slot);
+    return ssz[state.forkName].BeaconState.deserializeToView(state.bodyBytes);
+  };
 
-  const beaconRoot = await el.call({
-    to: '0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02',
-    data: ethers.utils.hexZeroPad(ethers.BigNumber.from(rootsTimestamp).toHexString(), 32),
-  });
-  if (beaconRoot !== finalized.root) {
-    throw new Error(`EIP-4788 holds ${beaconRoot} at ${rootsTimestamp}, expected ${finalized.root}`);
-  }
+  /** A proposed block at or after `slot` with its EIP-4788 key, confirmed against the predeploy */
+  const provable = async (slot: number) => {
+    const block = await consensus.findNextAvailableHeader(slot);
+    const writer = await consensus.findNextAvailableHeader(block.slot + 1);
+    const rootsTimestamp = consensus.slotToTimestamp(writer.slot);
+    const stored = await el.call({
+      to: BEACON_ROOTS,
+      data: ethers.utils.hexZeroPad(ethers.BigNumber.from(rootsTimestamp).toHexString(), 32),
+    });
+    if (stored !== block.header.root) {
+      throw new Error(`EIP-4788 holds ${stored} at ${rootsTimestamp}, not the root of slot ${block.slot}`);
+    }
+    return { ...headerFields(block.header), root: block.header.root, rootsTimestamp };
+  };
 
-  // ── the target block: proven against the recent block's state.block_roots ──
-  const { slot: targetSlot, header: targetHeader } = await consensus.findNextAvailableHeader(
-    recentSlot - TARGET_LAG_SLOTS,
-  );
-  if (targetSlot >= recentSlot) throw new Error('target block must be older than the recent block');
-
-  const recentState = await consensus.getState(recentSlot);
-  const recentStateView = ssz[recentState.forkName].BeaconState.deserializeToView(recentState.bodyBytes);
-  const rootIndex = targetSlot % slotsPerHistoricalRoot;
-  const blockRootsProof = generateBlockRootsProof(recentStateView, rootIndex);
-  const blockRootsGIndex = recentStateView.type.getPathInfo(['blockRoots', rootIndex]).gindex;
-  verifyProof(
-    recentStateView.hashTreeRoot(),
-    blockRootsGIndex,
-    blockRootsProof.witnesses,
-    recentStateView.blockRoots.get(rootIndex),
-  );
-
-  // ── the validator: proven against the target block's state ────────────────
-  const targetState = await consensus.getState(targetSlot);
-  const targetStateView = ssz[targetState.forkName].BeaconState.deserializeToView(targetState.bodyBytes);
-
-  const locator = new ethers.Contract(
-    LOCATOR,
-    ['function stakingRouter() view returns (address)', 'function withdrawalVault() view returns (address)'],
-    el,
-  );
-  const stakingRouter = new ethers.Contract(
-    await locator.stakingRouter(),
-    [
-      'function getStakingModule(uint256) view returns (tuple(uint24 id, address stakingModuleAddress, uint16 stakingModuleFee, uint16 treasuryFee, uint16 stakeShareLimit, uint8 status, string name, uint64 lastDepositAt, uint256 lastDepositBlock, uint256 exitedValidatorsCount, uint16 priorityExitShareThreshold, uint64 maxDepositsPerBlock, uint64 minDepositBlockDistance))',
-    ],
-    el,
-  );
-  const nor = new ethers.Contract(
-    (await stakingRouter.getStakingModule(1)).stakingModuleAddress,
-    ['function getSigningKeys(uint256,uint256,uint256) view returns (bytes, bytes, bool[])'],
-    el,
-  );
-
-  // A Lido key of module 1 / operator 0 that is still active on the CL
-  const { 0: keys } = await nor.getSigningKeys(0, 0, 10);
-  const pubkeys: string[] = [];
-  for (let i = 0; i < (keys.length - 2) / 96; i++) pubkeys.push('0x' + keys.slice(2 + i * 96, 2 + (i + 1) * 96));
-
-  let picked: { index: number; pubkey: string; keyIndex: number } | null = null;
-  for (const [keyIndex, pubkey] of pubkeys.entries()) {
-    const found = await fetch(`${CL_URL}/eth/v1/beacon/states/${targetSlot}/validators/${pubkey}`).then((r) =>
-      r.ok ? (r.json() as any) : null,
-    );
-    if (!found) continue;
-    const index = Number(found.data.index);
-    if (targetStateView.validators.get(index).exitEpoch !== Infinity) continue;
-    picked = { index, pubkey, keyIndex };
-    break;
-  }
-  if (!picked) throw new Error('no Lido key of module 1 / operator 0 is an active non-exiting validator');
-
-  const validator = targetStateView.validators.get(picked.index);
-  const validatorProof = generateValidatorProof(targetStateView, picked.index);
-  const validatorGIndex = targetStateView.type.getPathInfo(['validators', picked.index]).gindex;
-  verifyProof(targetStateView.hashTreeRoot(), validatorGIndex, validatorProof.witnesses, validator.hashTreeRoot());
-
-  // ── the exit request blob, dataFormat 2 ───────────────────────────────────
-  const entry = ethers.utils.hexConcat([
-    ethers.utils.hexZeroPad('0x01', 3), // moduleId
-    ethers.utils.hexZeroPad('0x00', 5), // nodeOpId
-    ethers.utils.hexZeroPad(ethers.BigNumber.from(picked.index).toHexString(), 8),
-    ethers.utils.hexZeroPad(ethers.BigNumber.from(picked.keyIndex).toHexString(), 8),
-    picked.pubkey,
-  ]);
-
-  const fixture = {
-    chain: {
-      genesisTime: consensus.genesisTimestamp,
-      secondsPerSlot,
-      slotsPerHistoricalRoot,
-      gloasForkSlot,
-      capellaSlot: consensus.epochToSlot(Number(consensus.beaconConfig.CAPELLA_FORK_EPOCH)),
-      shardCommitteePeriodInSeconds: 98304,
-      lidoLocator: LOCATOR,
-    },
-    gIndices: {
-      // pre-Gloas `validators[0]`, list capacity 2**40
-      gIFirstValidatorPreGloas: packGIndex(ssz.electra.BeaconState.getPathInfo(['validators', 0]).gindex, 40),
-      // Gloas `validators` node - the contract walks into the progressive list itself
-      gIValidators: packGIndex(ssz.gloas.BeaconState.getPathInfo(['validators']).gindex, 0),
-      gIBlockRootsPreGloas: packGIndex(ssz.electra.BeaconState.getPathInfo(['blockRoots']).gindex, 0),
-      gIBlockRoots: packGIndex(ssz.gloas.BeaconState.getPathInfo(['blockRoots']).gindex, 0),
-      gIFirstHistoricalSummaryPreGloas: packGIndex(
-        ssz.electra.BeaconState.getPathInfo(['historicalSummaries', 0]).gindex,
-        24,
-      ),
-      gIFirstHistoricalSummary: packGIndex(ssz.gloas.BeaconState.getPathInfo(['historicalSummaries', 0]).gindex, 24),
-      gIFirstBlockRootInSummary: packGIndex(
-        ssz.electra.BeaconState.getPathInfo(['historicalSummaries', 0, 'blockSummaryRoot']).gindex,
-        13,
-      ),
-    },
-    recent: { ...headerFields(finalized), root: finalized.root, rootsTimestamp },
-    target: {
-      ...headerFields(targetHeader),
-      root: targetHeader.root,
-      rootIndex,
-      gindex: blockRootsGIndex.toString(),
-      proof: blockRootsProof.witnesses.map(toHex),
-    },
-    validator: {
-      index: picked.index,
-      pubkey: picked.pubkey,
-      gindex: validatorGIndex.toString(),
+  const validatorWitness = (stateView: any, index: number) => {
+    const validator = stateView.validators.get(index);
+    const proof = generateValidatorProof(stateView, index);
+    const gindex = stateView.type.getPathInfo(['validators', index]).gindex;
+    verifyProof(stateView.hashTreeRoot(), gindex, proof.witnesses, validator.hashTreeRoot());
+    return {
+      index,
+      pubkey: toHex(validator.pubkey),
+      gindex: gindex.toString(),
       witness: {
         exitRequestIndex: 0,
         withdrawalCredentials: toHex(validator.withdrawalCredentials),
@@ -200,18 +101,138 @@ async function main() {
         activationEligibilityEpoch: validator.activationEligibilityEpoch,
         activationEpoch: validator.activationEpoch,
         withdrawableEpoch: validator.withdrawableEpoch === Infinity ? FAR_FUTURE_EPOCH : validator.withdrawableEpoch,
-        validatorProof: validatorProof.witnesses.map(toHex),
+        validatorProof: proof.witnesses.map(toHex),
       },
+    };
+  };
+
+  /** An old block proven against the anchor state's historical summaries, as processHistoricalSlot does */
+  const historical = async (anchorStateView: any, slot: number) => {
+    const { slot: oldSlot, header } = await consensus.findNextAvailableHeader(slot);
+    const summaryIndex = Math.floor((oldSlot - capellaSlot) / slotsPerHistoricalRoot);
+    const rootIndex = oldSlot % slotsPerHistoricalRoot;
+    const summaryStateView = await stateViewAt(capellaSlot + (summaryIndex + 1) * slotsPerHistoricalRoot);
+    const proof = generateHistoricalStateProof(anchorStateView, summaryStateView, summaryIndex, rootIndex);
+    return {
+      oldStateView: await stateViewAt(oldSlot),
+      old: { ...headerFields(header), root: header.root, proof: proof.witnesses.map(toHex) },
+    };
+  };
+
+  // ── the Lido key reported in the full calls ───────────────────────────────
+  const locator = new ethers.Contract(LOCATOR, ['function stakingRouter() view returns (address)'], el);
+  // StakingModule changes shape between protocol versions; it is returned as a dynamic tuple whose
+  // first two head words are the id and the module address, so only those are decoded
+  const moduleCall = await el.call({
+    to: await locator.stakingRouter(),
+    data: new ethers.utils.Interface(['function getStakingModule(uint256)']).encodeFunctionData('getStakingModule', [
+      1,
+    ]),
+  });
+  const module = {
+    id: ethers.BigNumber.from(ethers.utils.hexDataSlice(moduleCall, 32, 64)).toNumber(),
+    stakingModuleAddress: ethers.utils.getAddress(ethers.utils.hexDataSlice(moduleCall, 76, 96)),
+  };
+  const nor = new ethers.Contract(
+    module.stakingModuleAddress,
+    ['function getSigningKeys(uint256,uint256,uint256) view returns (bytes, bytes, bool[])'],
+    el,
+  );
+  const { 0: keys } = await nor.getSigningKeys(0, 0, 10);
+  const lidoKeys: string[] = [];
+  for (let i = 0; i < (keys.length - 2) / 96; i++) lidoKeys.push('0x' + keys.slice(2 + i * 96, 2 + (i + 1) * 96));
+
+  // ── the finalized anchor, the block the historical proofs are made against ─
+  const finalized = await consensus.getBeaconHeader('finalized');
+  const finalizedSlot = Number(finalized.header.message.slot);
+  const anchorHeader = await consensus.getBeaconHeader(finalized.header.message.parent_root);
+  const anchor = await provable(Number(anchorHeader.header.message.slot));
+  const anchorStateView = await stateViewAt(anchor.slot);
+
+  // A Lido key that is active and not exiting in every state it is proven in
+  const activeIn = (stateView: any, pubkey: string) => {
+    for (let i = 0; i < stateView.validators.length; i++) {
+      const validator = stateView.validators.get(i);
+      if (toHex(validator.pubkey) === pubkey) return validator.exitEpoch === Infinity ? i : null;
+    }
+    return null;
+  };
+
+  // ── current: proven through EIP-4788 itself ───────────────────────────────
+  const currentBlock = await provable(finalizedSlot - CURRENT_LAG_SLOTS);
+  const currentStateView = await stateViewAt(currentBlock.slot);
+
+  // ── historical: the newest completed summary period that is entirely post-Gloas ─
+  const lastSummary = Math.floor((anchor.slot - capellaSlot) / slotsPerHistoricalRoot) - 1;
+  const gloasOldSlot = capellaSlot + lastSummary * slotsPerHistoricalRoot + slotsPerHistoricalRoot / 2;
+  if (gloasOldSlot < gloasSlot) throw new Error('no completed historical summary period after the Gloas fork yet');
+  const gloasOld = await historical(anchorStateView, gloasOldSlot);
+
+  // ── historicalPreGloas: a block from before the fork, proven from the Gloas anchor ─
+  const preGloasOld = await historical(anchorStateView, Math.max(capellaSlot + 1, gloasSlot - CURRENT_LAG_SLOTS));
+  if (preGloasOld.old.slot >= gloasSlot) throw new Error('the pre-Gloas block landed after the fork');
+
+  let picked: { pubkey: string; keyIndex: number; current: number; historical: number } | null = null;
+  for (const [keyIndex, pubkey] of lidoKeys.entries()) {
+    const current = activeIn(currentStateView, pubkey);
+    const historicalIndex = activeIn(gloasOld.oldStateView, pubkey);
+    if (current === null || historicalIndex === null) continue;
+    picked = { pubkey, keyIndex, current, historical: historicalIndex };
+    break;
+  }
+  if (!picked) throw new Error('no Lido key of the first module / operator 0 is active in both states');
+
+  // dataFormat 2: moduleId (3) | nodeOpId (5) | validatorIndex (8) | keyIndex (8) | pubkey (48)
+  const exitRequest = (validatorIndex: number) => ({
+    data: ethers.utils.hexConcat([
+      ethers.utils.hexZeroPad(ethers.BigNumber.from(module.id).toHexString(), 3),
+      ethers.utils.hexZeroPad('0x00', 5),
+      ethers.utils.hexZeroPad(ethers.BigNumber.from(validatorIndex).toHexString(), 8),
+      ethers.utils.hexZeroPad(ethers.BigNumber.from(picked!.keyIndex).toHexString(), 8),
+      picked!.pubkey,
+    ]),
+    dataFormat: 2,
+    moduleId: Number(module.id),
+    nodeOpId: 0,
+  });
+
+  const fixture = {
+    chain: {
+      genesisTime: consensus.genesisTimestamp,
+      secondsPerSlot: Number(consensus.beaconConfig.SECONDS_PER_SLOT),
+      slotsPerEpoch: Number(consensus.beaconConfig.SLOTS_PER_EPOCH),
+      slotsPerHistoricalRoot,
+      capellaSlot,
+      gloasSlot,
+      shardCommitteePeriodInSeconds: 256 * 32 * Number(consensus.beaconConfig.SECONDS_PER_SLOT),
+      lidoLocator: LOCATOR,
     },
-    exitRequests: { data: entry, dataFormat: 2, moduleId: 1, nodeOpId: 0, keyIndex: picked.keyIndex },
+    current: {
+      block: currentBlock,
+      validator: validatorWitness(currentStateView, picked.current),
+      exitRequests: exitRequest(picked.current),
+    },
+    historical: {
+      anchor,
+      old: gloasOld.old,
+      validator: validatorWitness(gloasOld.oldStateView, picked.historical),
+      exitRequests: exitRequest(picked.historical),
+    },
+    // Proof-level only: Lido keys may not exist yet before the fork, so any validator will do
+    historicalPreGloas: {
+      anchor,
+      old: preGloasOld.old,
+      validator: validatorWitness(preGloasOld.oldStateView, 0),
+    },
   };
 
   writeFileSync(OUT, JSON.stringify(fixture, null, 2));
   console.log(
     `fixture written to ${OUT}\n` +
-      `  recent slot ${recentSlot} (rootsTimestamp ${rootsTimestamp}, verified against EIP-4788)\n` +
-      `  target slot ${targetSlot} (block_roots[${rootIndex}], ${blockRootsProof.witnesses.length} nodes)\n` +
-      `  validator ${picked.index} ${picked.pubkey.slice(0, 18)} (${validatorProof.witnesses.length} nodes)`,
+      `  current: slot ${currentBlock.slot}, rootsTimestamp ${currentBlock.rootsTimestamp}\n` +
+      `  anchor: slot ${anchor.slot}, rootsTimestamp ${anchor.rootsTimestamp}\n` +
+      `  historical: slot ${gloasOld.old.slot} (Gloas), slot ${preGloasOld.old.slot} (pre-Gloas, fork at ${gloasSlot})\n` +
+      `  validator: ${picked.pubkey.slice(0, 18)} (key ${picked.keyIndex} of module ${module.id})`,
   );
 }
 
