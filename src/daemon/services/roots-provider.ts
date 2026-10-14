@@ -8,6 +8,12 @@ import { ConfigService } from '../../common/config/config.service';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
 
+/**
+ * Lowest slot the daemon may start from. Not zero: the genesis block carries a default-constructed
+ * body, so its execution block hash is all zeroes and cannot be resolved into an execution anchor.
+ */
+const EARLIEST_ANCHORABLE_SLOT = 1;
+
 @Injectable()
 export class RootsProvider {
   constructor(
@@ -72,7 +78,11 @@ export class RootsProvider {
     // 2. Fallback to header from START_LOOKBACK_DAYS ago
     const lookbackDays = this.config.get('START_LOOKBACK_DAYS');
     const lookbackTimestamp = Math.floor(Date.now() / 1000) - lookbackDays * 24 * 60 * 60;
-    const lookbackSlot = this.consensus.timestampToSlot(lookbackTimestamp);
+    // On a chain younger than the lookback window the requested slot lands before genesis and the CL
+    // rejects the negative slot with a 400 every cycle. Clamp to slot 1 rather than 0: the genesis
+    // block body is default-constructed, so its execution block hash is zero and no EL node can
+    // resolve it into an anchor. Slot 1 is the earliest usable one and still covers the whole chain.
+    const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
 
     try {
       const header = await this.consensus.getBeaconHeader(lookbackSlot.toString());
