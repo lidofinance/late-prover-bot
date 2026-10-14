@@ -271,24 +271,33 @@ const NEXT_PROPOSED_SLOT = 3624535;
 
 const rootOf = (slot: number) => `0xroot${slot}`;
 
+/** EIP-4788 HISTORY_BUFFER_LENGTH */
+const HISTORY_BUFFER_LENGTH = 8191;
+
 /**
  * Chain stub. `missed` slots have no block; `unstored` slots produce no beacon roots entry - a
- * missed execution block before Gloas, a withheld payload after it. Everything else is answered by
- * the predeploy the way the real one would.
+ * missed execution block before Gloas, a withheld payload after it. With a `head`, entries written
+ * more than HISTORY_BUFFER_LENGTH slots before it are evicted. Everything else is answered by the
+ * predeploy the way the real one would.
  */
-const makeAnchorService = ({ missed = [] as number[], unstored = [] as number[] } = {}) => {
+const makeAnchorService = ({
+  missed = [] as number[],
+  unstored = [] as number[],
+  head = undefined as number | undefined,
+} = {}) => {
   const getBeaconHeader = jest.fn(async (blockId: string) => {
-    const slot = Number(blockId);
+    const slot = blockId === 'head' && head !== undefined ? head : Number(blockId);
     if (missed.includes(slot)) {
       throw new RequestError(`NOT_FOUND: beacon block at slot ${slot}`, 404);
     }
-    return { root: rootOf(slot), header: { message: { slot: blockId } } };
+    return { root: rootOf(slot), header: { message: { slot: String(slot) } } };
   });
 
   // The execution block of slot W stores the root of W's parent under ts(W)
   const call = jest.fn(async ({ data }: { to: string; data: string }) => {
     const timestamp = Number(BigInt(data));
     const writerSlot = (timestamp - HOODI_GENESIS) / SECONDS_PER_SLOT;
+    if (head !== undefined && writerSlot <= head - HISTORY_BUFFER_LENGTH) throw new Error('execution reverted');
     if (unstored.includes(writerSlot)) return '0x';
     let parent = writerSlot - 1;
     while (missed.includes(parent)) parent--;
@@ -298,7 +307,7 @@ const makeAnchorService = ({ missed = [] as number[], unstored = [] as number[] 
   const service = makeService({
     consensus: {
       genesisTimestamp: HOODI_GENESIS,
-      beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT },
+      beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT, SLOTS_PER_HISTORICAL_ROOT: '8192' },
       slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
       getBeaconHeader,
     },
@@ -382,5 +391,53 @@ describe('ProverService.resolveProvableAnchor', () => {
     await expect((service as any).resolveProvableAnchor(PROVABLE_SLOT)).rejects.toThrow(
       'Failed to find a provable anchor',
     );
+  });
+});
+
+// ─── processDeadlineSlot — choosing the proof path ────────────────────────────
+
+/** Runs processDeadlineSlot with the proof building and submission stubbed out */
+const runDeadlineSlot = async (deadlineSlot: number, head: number) => {
+  const { service, call } = makeAnchorService({ head });
+  service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async () => 0) };
+  jest.spyOn(service, 'processValidatorGroup').mockResolvedValue({
+    validatorWitnesses: [{}],
+    processedValidators: 1,
+    skippedValidators: 0,
+  });
+  const processHistoricalSlot = jest.spyOn(service, 'processHistoricalSlot').mockResolvedValue(undefined);
+  const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
+
+  await service.processDeadlineSlot(deadlineSlot, [{ validators: [], exitRequest: {} }], {}, {}, {}, 0, 0);
+
+  return { call, processHistoricalSlot, processCurrentSlot };
+};
+
+describe('ProverService.processDeadlineSlot', () => {
+  // A deadline older than the beacon roots buffer is proven through the historical summaries of the
+  // finalized anchor. Its own entry is long evicted, and the proof does not need it.
+  it('proves an old deadline through the historical path without its beacon roots entry', async () => {
+    const head = PROVABLE_SLOT + 2 * 7200;
+
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
+
+    expect(processCurrentSlot).not.toHaveBeenCalled();
+    expect(processHistoricalSlot).toHaveBeenCalledTimes(1);
+    expect(processHistoricalSlot.mock.calls[0][0]).toMatchObject({ slot: PROVABLE_SLOT });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('proves a recent deadline against its confirmed beacon roots entry', async () => {
+    const head = PROVABLE_SLOT + 100;
+
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
+
+    expect(processHistoricalSlot).not.toHaveBeenCalled();
+    expect(processCurrentSlot).toHaveBeenCalledTimes(1);
+    expect(processCurrentSlot.mock.calls[0][2]).toMatchObject({
+      header: { slot: PROVABLE_SLOT },
+      rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
+    });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 });
