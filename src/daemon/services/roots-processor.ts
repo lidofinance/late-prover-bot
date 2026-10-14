@@ -5,6 +5,7 @@ import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
 import { ExitRequestsContract } from '../../common/contracts/validator-exit-bus.service';
+import { resolveElBlockNumber } from '../../common/helpers/el-anchor';
 import { serializeError } from '../../common/logger/safe-error-format';
 import { PrometheusService, TrackTask } from '../../common/prometheus';
 import { getSizeRangeCategory } from '../../common/prometheus/decorators';
@@ -59,8 +60,8 @@ export class RootsProcessor {
     const processingStartTime = Date.now();
 
     const [prevBlockNumber, finalizedBlockNumber] = await Promise.all([
-      this.resolveElBlockNumber(prevHeader),
-      this.resolveElBlockNumber(finalizedHeader),
+      resolveElBlockNumber(this.consensus, this.provider, prevHeader),
+      resolveElBlockNumber(this.consensus, this.provider, finalizedHeader),
     ]);
 
     const blockRange = finalizedBlockNumber - prevBlockNumber;
@@ -92,7 +93,9 @@ export class RootsProcessor {
           `\n  Range: ${prevBlockNumber} -> ${finalizedBlockNumber}` +
           `\n  Size: ${blockRange} blocks` +
           `\n  Duration: ${processingDuration}ms` +
-          `\n  Avg per block: ${(processingDuration / blockRange).toFixed(2)}ms`,
+          // From Gloas on the range can legitimately be empty: a slot whose payload was withheld
+          // adds no execution block, so two consecutive anchors can be the same block.
+          `\n  Avg per block: ${blockRange > 0 ? `${(processingDuration / blockRange).toFixed(2)}ms` : 'n/a'}`,
       );
     } catch (error) {
       this.logger.error(
@@ -103,20 +106,6 @@ export class RootsProcessor {
     } finally {
       stopBlockRangeTimer();
     }
-  }
-
-  /**
-   * The EL block the given CL block is anchored on - the end of the range scanned for exit requests.
-   */
-  private async resolveElBlockNumber(header: BlockHeaderResponse): Promise<number> {
-    const blockHash = await this.consensus.getExecutionBlockHash(header);
-    const block = await this.provider.getBlock(blockHash);
-    if (!block) {
-      throw new Error(
-        `Execution block [${blockHash}] anchored at slot [${header.header.message.slot}] is unknown to the EL node`,
-      );
-    }
-    return block.number;
   }
 
   /**

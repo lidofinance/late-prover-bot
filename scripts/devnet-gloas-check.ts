@@ -145,8 +145,9 @@ async function main() {
     'state root matches the finalized header',
   );
 
-  const { generateValidatorProof } = await import('../src/common/helpers/proofs');
-  const { verifyProof } = await import('../src/common/helpers/proofs');
+  const { generateHistoricalStateProof, generateValidatorProof, verifyProof } = await import(
+    '../src/common/helpers/proofs'
+  );
   const validatorIndex = stateView.validators.length - 1;
   const proof = generateValidatorProof(stateView, validatorIndex);
   let proofOk = true;
@@ -161,6 +162,31 @@ async function main() {
     proofOk = false;
   }
   check(proofOk, `validator ${validatorIndex} proof verifies against the state root`);
+
+  // ── 6. historical summaries proof, the path taken for deadlines older than
+  //       SLOTS_PER_HISTORICAL_ROOT ───────────────────────────────────────────
+  console.log('\n6. Historical summaries proof');
+  const slotsPerHistoricalRoot = Number(consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
+  const capellaSlot = consensus.epochToSlot(Number(consensus.beaconConfig.CAPELLA_FORK_EPOCH));
+  const oldSlot = finalizedSlot - slotsPerHistoricalRoot;
+  const summaryIndex = Math.floor((oldSlot - capellaSlot) / slotsPerHistoricalRoot);
+  const summarySlot = capellaSlot + (summaryIndex + 1) * slotsPerHistoricalRoot;
+
+  if (summarySlot > finalizedSlot || oldSlot < capellaSlot) {
+    console.log(`  - skipped: summary slot ${summarySlot} is not reachable yet (finalized ${finalizedSlot})`);
+  } else {
+    const summaryState = await consensus.getState(summarySlot);
+    const summaryStateView = ssz[summaryState.forkName].BeaconState.deserializeToView(summaryState.bodyBytes);
+    // generateHistoricalStateProof verifies its own output against the anchor state root
+    let historicalOk = true;
+    try {
+      generateHistoricalStateProof(stateView, summaryStateView, summaryIndex, oldSlot % slotsPerHistoricalRoot);
+    } catch (error) {
+      historicalOk = false;
+      console.log(`  ✗ ${error instanceof Error ? error.message : String(error)}`);
+    }
+    check(historicalOk, `block root of slot ${oldSlot} proven through summary ${summaryIndex} (state ${summarySlot})`);
+  }
 
   console.log(failures === 0 ? '\nAll checks passed\n' : `\n${failures} check(s) FAILED\n`);
   process.exit(failures === 0 ? 0 : 1);
