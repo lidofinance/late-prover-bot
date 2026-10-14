@@ -11,7 +11,6 @@ import { VerifierContract } from '../contracts/validator-exit-delay-verifier.ser
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
-import { RequestError } from '../providers/base/rest-provider';
 import { Consensus } from '../providers/consensus/consensus';
 import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 import { Execution } from '../providers/execution/execution';
@@ -794,7 +793,7 @@ export class ProverService implements OnModuleInit {
     // recent one needs its own entry in the beacon roots predeploy - an old one's is long evicted
     const isOldSlot = await this.isSlotOld(deadlineSlot);
     const anchor = isOldSlot ? undefined : await this.resolveProvableAnchor(deadlineSlot);
-    const deadlineBlock: ProposedBlock = anchor ?? (await this.findNextAvailableSlot(deadlineSlot));
+    const deadlineBlock: ProposedBlock = anchor ?? (await this.consensus.findNextAvailableHeader(deadlineSlot));
     const actualSlot = deadlineBlock.slot;
 
     // Use the slot the validator state is proven at for the proof timestamp
@@ -1448,10 +1447,10 @@ export class ProverService implements OnModuleInit {
    * state is read at that same later slot.
    */
   private async resolveProvableAnchor(startSlot: number): Promise<ProvableAnchor> {
-    let anchor = await this.findNextAvailableSlot(startSlot);
+    let anchor = await this.consensus.findNextAvailableHeader(startSlot);
 
     for (let attempt = 0; attempt < MAX_ANCHOR_ADVANCES; attempt++) {
-      const writer = await this.findNextAvailableSlot(anchor.slot + 1);
+      const writer = await this.consensus.findNextAvailableHeader(anchor.slot + 1);
       const rootsTimestamp = this.consensus.slotToTimestamp(writer.slot);
       const storedRoot = await this.getBeaconBlockRoot(rootsTimestamp);
 
@@ -1490,45 +1489,6 @@ export class ProverService implements OnModuleInit {
       // Reverts for a timestamp outside the ring buffer
       return null;
     }
-  }
-
-  /**
-   * Find the next available (non-skipped) slot at or after the given slot
-   * Beacon chain can have skipped slots where no block was proposed
-   *
-   * @param startSlot The slot to start searching from
-   * @param maxAttempts Maximum number of slots to try (default: 32, one epoch)
-   * @returns The next available slot number and its header
-   */
-  private async findNextAvailableSlot(startSlot: number, maxAttempts: number = 32): Promise<ProposedBlock> {
-    let currentSlot = startSlot;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const header = await this.consensus.getBeaconHeader(currentSlot.toString());
-        // Successfully got header - this slot has a block
-        this.loggerService.log(
-          `Found available slot ${currentSlot}` +
-            (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
-        );
-        return { slot: currentSlot, header };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Only retry for 404 errors (skipped slots), throw all other errors
-        if (!(error instanceof RequestError && error.statusCode === 404)) {
-          throw error;
-        }
-
-        this.loggerService.debug?.(`Slot ${currentSlot} is skipped (404), trying next slot`);
-        currentSlot++;
-      }
-    }
-
-    throw new Error(
-      `Failed to find available slot after ${maxAttempts} attempts starting from slot ${startSlot}. Last error: ${lastError?.message}`,
-    );
   }
 
   /**

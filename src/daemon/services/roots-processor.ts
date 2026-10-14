@@ -1,7 +1,6 @@
 import { SimpleFallbackJsonRpcBatchProvider } from '@lido-nestjs/execution';
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
-import { hexlify } from 'ethers/lib/utils';
 
 import { LastProcessedRoot, ProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
@@ -59,15 +58,10 @@ export class RootsProcessor {
   private async processBlockRoot(prevHeader: BlockHeaderResponse, finalizedHeader: BlockHeaderResponse): Promise<void> {
     const processingStartTime = Date.now();
 
-    // CL blocks handling
-    const prevBlock = await this.consensus.getBlockInfo(prevHeader.root);
-    const finalizedBlock = await this.consensus.getBlockInfo(finalizedHeader.root);
-    const prevBlockHash = hexlify(prevBlock.body.executionPayload.blockHash);
-    const finalizedBlockHash = hexlify(finalizedBlock.body.executionPayload.blockHash);
-
-    // EL blocks handling
-    const prevBlockNumber = (await this.provider.getBlock(prevBlockHash)).number;
-    const finalizedBlockNumber = (await this.provider.getBlock(finalizedBlockHash)).number;
+    const [prevBlockNumber, finalizedBlockNumber] = await Promise.all([
+      this.resolveElBlockNumber(prevHeader),
+      this.resolveElBlockNumber(finalizedHeader),
+    ]);
 
     const blockRange = finalizedBlockNumber - prevBlockNumber;
     const rangeSizeCategory = getSizeRangeCategory(blockRange);
@@ -109,6 +103,20 @@ export class RootsProcessor {
     } finally {
       stopBlockRangeTimer();
     }
+  }
+
+  /**
+   * The EL block the given CL block is anchored on - the end of the range scanned for exit requests.
+   */
+  private async resolveElBlockNumber(header: BlockHeaderResponse): Promise<number> {
+    const blockHash = await this.consensus.getExecutionBlockHash(header);
+    const block = await this.provider.getBlock(blockHash);
+    if (!block) {
+      throw new Error(
+        `Execution block [${blockHash}] anchored at slot [${header.header.message.slot}] is unknown to the EL node`,
+      );
+    }
+    return block.number;
   }
 
   /**
