@@ -4,7 +4,6 @@
  * Runs the real Consensus provider and the real ProverService anchor resolution against the node,
  * then checks every conclusion against the chain itself:
  *   - the EL anchor of a CL block is a block the EL actually knows, at that block's slot or earlier;
- *   - our "was the payload revealed" predicate agrees with the EIP-4788 beacon roots predeploy;
  *   - the anchor the prover would submit really does have its root in the ring buffer.
  *
  * Usage: CL_API_URLS=... EL_API_URL=... npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
@@ -13,7 +12,7 @@ import { ethers } from 'ethers';
 
 import { WorkingMode } from '../src/common/config/env.validation';
 import { ProverService } from '../src/common/prover/prover.service';
-import { Consensus, getExecutionPayload, isPayloadRevealed } from '../src/common/providers/consensus/consensus';
+import { Consensus, getExecutionPayload } from '../src/common/providers/consensus/consensus';
 
 const CL_URL = process.env.CL_API_URLS as string;
 const EL_URL = process.env.EL_API_URL as string;
@@ -89,39 +88,8 @@ async function main() {
     );
   }
 
-  // ── 3. payload presence predicate vs the chain ────────────────────────────
-  console.log(`\n3. isPayloadRevealed vs EIP-4788, over the last ${SAMPLE_SLOTS} slots before finalization`);
-  let proposed = 0;
-  let withheld = 0;
-  let agreed = 0;
-  let checked = 0;
-
-  let slot = finalizedSlot - SAMPLE_SLOTS;
-  let current = await consensus.findNextAvailableBlock(slot);
-  while (current.slot < finalizedSlot) {
-    const next = await consensus.findNextAvailableBlock(current.slot + 1);
-    proposed++;
-    const revealed = isPayloadRevealed(current.block, next.block);
-    if (!revealed) withheld++;
-
-    // The root of `current`'s parent is stored by `current`'s execution block, under its timestamp.
-    // So `revealed` must be exactly "the buffer holds `current.header.parent_root` at ts(current)".
-    const stored = await beaconRootAt(el, consensus.slotToTimestamp(current.slot));
-    const expected = current.header.header.message.parent_root;
-    const holdsParentRoot = stored === expected;
-    if (holdsParentRoot === revealed) agreed++;
-    else
-      console.log(
-        `  ✗ slot ${current.slot}: predicate says revealed=${revealed}, buffer says ${stored ?? 'revert'} (expected ${expected})`,
-      );
-    checked++;
-
-    current = next;
-  }
-  check(agreed === checked, `${agreed}/${checked} blocks agree (${proposed} proposed, ${withheld} payloads withheld)`);
-
-  // ── 4. the anchor the prover would submit ─────────────────────────────────
-  console.log('\n4. resolveProvableAnchor - what the prover would put on chain');
+  // ── 3. the anchor the prover would submit ─────────────────────────────────
+  console.log('\n3. resolveProvableAnchor - what the prover would put on chain');
   for (const start of [finalizedSlot - SAMPLE_SLOTS, finalizedSlot - Math.floor(SAMPLE_SLOTS / 2), finalizedSlot]) {
     const anchor = await prover.resolveProvableAnchor(start);
     const stored = await beaconRootAt(el, anchor.rootsTimestamp);
@@ -133,8 +101,8 @@ async function main() {
     );
   }
 
-  // ── 5. state download, decoding and a validator proof ─────────────────────
-  console.log('\n5. Beacon state at the anchor slot');
+  // ── 4. state download, decoding and a validator proof ─────────────────────
+  console.log('\n4. Beacon state at the anchor slot');
   const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
   const state = await consensus.getState(finalizedSlot);
   check(state.forkName === 'gloas', `state at slot ${finalizedSlot} reports fork ${state.forkName}`);
@@ -163,9 +131,9 @@ async function main() {
   }
   check(proofOk, `validator ${validatorIndex} proof verifies against the state root`);
 
-  // ── 6. historical summaries proof, the path taken for deadlines older than
+  // ── 5. historical summaries proof, the path taken for deadlines older than
   //       SLOTS_PER_HISTORICAL_ROOT ───────────────────────────────────────────
-  console.log('\n6. Historical summaries proof');
+  console.log('\n5. Historical summaries proof');
   const slotsPerHistoricalRoot = Number(consensus.beaconConfig.SLOTS_PER_HISTORICAL_ROOT);
   const capellaSlot = consensus.epochToSlot(Number(consensus.beaconConfig.CAPELLA_FORK_EPOCH));
   const oldSlot = finalizedSlot - slotsPerHistoricalRoot;

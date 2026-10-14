@@ -34,14 +34,6 @@ export interface State {
   forkName: SupportedFork;
 }
 
-/** A proposed block: its header, its decoded body and the fork the body was decoded with. */
-export interface AvailableBlock {
-  slot: number;
-  header: BlockHeaderResponse;
-  block: SupportedBlock;
-  forkName: SupportedFork;
-}
-
 /** How many slots to scan forward before giving up on finding a proposed block (one epoch). */
 const MAX_SLOTS_SCANNED_FORWARD = 32;
 
@@ -65,31 +57,6 @@ export const getExecutionPayload = (block: SupportedBlock): BlockBodyFields['exe
 /** The bid a Gloas block commits to; `undefined` before EIP-7732. */
 export const getExecutionPayloadBid = (block: SupportedBlock): BlockBodyFields['signedExecutionPayloadBid'] =>
   blockBody(block).signedExecutionPayloadBid;
-
-/**
- * Whether the execution payload committed to by `block` was actually revealed, i.e. whether an
- * execution block carrying that slot's timestamp exists.
- *
- * Before EIP-7732 the payload is part of the block, so it exists whenever the block does. From
- * Gloas on the builder may withhold it, and only the next proposed block settles the question:
- * `process_execution_payload_bid` makes that block's bid commit to `state.latest_block_hash`, and
- * `process_parent_execution_payload` sets that field to the parent's payload hash only when the
- * parent's payload was applied. So the payload of `block` was revealed exactly when the bid of the
- * next block points at it.
- */
-export function isPayloadRevealed(block: SupportedBlock, nextBlock: SupportedBlock): boolean {
-  if (getExecutionPayload(block)) {
-    return true;
-  }
-
-  const bid = getExecutionPayloadBid(block);
-  const nextBid = getExecutionPayloadBid(nextBlock);
-  if (!bid || !nextBid) {
-    throw new Error('Post EIP-7732 block carries neither an execution payload nor an execution payload bid');
-  }
-
-  return hexlify(nextBid.message.parentBlockHash) === hexlify(bid.message.blockHash);
-}
 
 @Injectable()
 export class Consensus extends BaseRestProvider implements OnModuleInit {
