@@ -135,14 +135,18 @@ Gloas node and validates every conclusion against the chain (EIP-4788 buffer con
 existence, state root vs the block header):
 
 ```bash
-CL_API_URLS=<cl> EL_API_URL=<el> npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
+TS_NODE_COMPILER_OPTIONS='{"esModuleInterop":true}' CL_API_URLS=<cl> EL_API_URL=<el> \
+  npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
 ```
 
-It covers block decoding, the EL anchor, the payload-revealed predicate against the ring buffer, the
-anchors the prover would submit, the state at the anchor slot with a validator proof, and the
-historical-summaries proof.
+It covers block decoding, the EL anchor, the anchors the prover would submit, the state at the
+anchor slot with a validator proof, and the historical-summaries proof.
 
-Last run against `glamsterdam-kurtosis-7` (Lighthouse v8.2.0 / Besu, `GLOAS_FORK_EPOCH=3`): all
+Last run against `lido-gloas-csn-1` (Lighthouse v8.3.0-rc.0 / Geth v1.17.7, `GLOAS_FORK_EPOCH=113`)
+on `@lodestar/types` 1.50.0: all checks pass, including the root of a real Gloas state against its
+block header.
+
+Earlier run against `glamsterdam-kurtosis-7` (Lighthouse v8.2.0 / Besu, `GLOAS_FORK_EPOCH=3`): all
 checks pass. Over 1197 slots that devnet had 397 missed slots and **no withheld payloads** — every
 proposer self-builds (`builder_index = BUILDER_INDEX_SELF_BUILD`) — so the missed-slot path is
 exercised against real data while the withheld-payload path is covered by unit tests only.

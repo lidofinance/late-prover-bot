@@ -6,7 +6,8 @@
  *   - the EL anchor of a CL block is a block the EL actually knows, at that block's slot or earlier;
  *   - the anchor the prover would submit really does have its root in the ring buffer.
  *
- * Usage: CL_API_URLS=... EL_API_URL=... npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
+ * Usage: TS_NODE_COMPILER_OPTIONS='{"esModuleInterop":true}' CL_API_URLS=... EL_API_URL=... \
+ *   npx ts-node -r tsconfig-paths/register scripts/devnet-gloas-check.ts
  */
 import { ethers } from 'ethers';
 
@@ -61,7 +62,7 @@ async function main() {
   await consensus.onModuleInit();
   const el = new ethers.providers.JsonRpcProvider(EL_URL);
 
-  const prover = new (ProverService as any)(logger, consensus, {}, {}, {}, {}, {}, config, 50);
+  const prover = new (ProverService as any)(logger, consensus, {}, {}, {}, { provider: el }, {}, config, 50);
 
   const head = await consensus.getBeaconHeader('head');
   const finalized = await consensus.getBeaconHeader('finalized');
