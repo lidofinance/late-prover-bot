@@ -271,6 +271,11 @@ const NEXT_PROPOSED_SLOT = 3624535;
 
 const rootOf = (slot: number) => `0xroot${slot}`;
 
+const makeHeader = (slot: number) => ({
+  root: rootOf(slot),
+  header: { message: { slot: slot.toString(), proposer_index: '1', parent_root: rootOf(slot - 1) } },
+});
+
 /** EIP-4788 HISTORY_BUFFER_LENGTH */
 const HISTORY_BUFFER_LENGTH = 8191;
 
@@ -293,6 +298,13 @@ const makeAnchorService = ({
     return { root: rootOf(slot), header: { message: { slot: String(slot) } } };
   });
 
+  // The forward scan lives on the consensus provider; this is the same 404-skipping behaviour
+  const findNextAvailableHeader = jest.fn(async (startSlot: number) => {
+    let slot = startSlot;
+    while (missed.includes(slot)) slot++;
+    return { slot, header: await getBeaconHeader(slot.toString()) };
+  });
+
   // The execution block of slot W stores the root of W's parent under ts(W)
   const call = jest.fn(async ({ data }: { to: string; data: string }) => {
     const timestamp = Number(BigInt(data));
@@ -310,6 +322,7 @@ const makeAnchorService = ({
       beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT, SLOTS_PER_HISTORICAL_ROOT: '8192' },
       slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
       getBeaconHeader,
+      findNextAvailableHeader,
     },
     execution: { provider: { call } },
   });
