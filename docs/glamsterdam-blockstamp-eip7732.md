@@ -66,7 +66,8 @@ state is read at that same later slot.
   particular the proof anchor is **not** shifted to the child block the way `lido-oracle` shifts its
   reference blockstamp — the oracle does that because it needs EL-derived data (block hash, deposits,
   withdrawals) to be settled, while this bot only needs the validator registry.
-- ## 3. No fixed number of execution blocks per slot
+
+## 3. No fixed number of execution blocks per slot
 
 Pre-fork a slot either had a block, payload included, or was missed. From Gloas on a slot can have a
 block *and* no execution block, so "one execution block per 12 s" is a weaker assumption than it
@@ -165,9 +166,3 @@ Successfully processed roots transition: slot 170892 -> 177952
 
 The devnet has exit requests but all with an empty validator list, so no proof was built and nothing
 reached the verifier — expected, and the part that is blocked on the contract anyway.
-
-## Known gap (pre-existing)
-
-`isSlotOld` switches to the historical-summaries proof at `SLOTS_PER_HISTORICAL_ROOT` (8192 slots),
-while the EIP-4788 ring buffer only holds 8191 slots (~27 h). A deadline slot in that one-slot gap
-is proven through the current-slot path against a root that has already been evicted.
