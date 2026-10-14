@@ -114,17 +114,18 @@ submitted. Pinned by `proofs.spec.ts`.
 
 ## Dependency
 
-`@lodestar/types` is pinned to **1.46.0-rc.1**, the first version whose Gloas containers hash the
-same way the devnet clients do:
+`@lodestar/types` is pinned exactly to **1.46.0**, the first release whose Gloas containers hash the
+same way the devnet clients do. The devnet run below used 1.46.0-rc.1; 1.46.0 has the same Gloas
+containers and generalized indices and the same `@chainsafe/ssz`:
 
 - 1.34.x aliases `ssz.gloas` to the Fulu containers, so post-fork blocks and states decode with the
   wrong layout, silently.
-- 1.45.0 (current `latest`) predates EIP-7916. It serializes a Gloas state byte-identically to what
+- 1.45.0 predates EIP-7916. It serializes a Gloas state byte-identically to what
   the node serves, but hashes it to a different root, so every proof built from it would be rejected.
   This is easy to miss precisely because deserialization succeeds.
 
-Move to 1.46.0 final once it is released. Whenever the Gloas spec moves, re-run the devnet check
-below rather than trusting a green unit suite.
+The pin is exact on purpose: a newer release may follow a newer Gloas spec than the target chain.
+Before moving it, re-run the devnet check below rather than trusting a green unit suite.
 
 ## Devnet check
 

@@ -1226,18 +1226,18 @@
   dependencies:
     call-bind "^1.0.8"
 
-"@lodestar/params@1.46.0-rc.1", "@lodestar/params@^1.46.0-rc.1":
-  version "1.46.0-rc.1"
-  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.46.0-rc.1.tgz#1e7f8135a952c3e25cc76a3a1dcc73783a55a19c"
-  integrity sha512-yHZKhI4RYURr4MAfuXxbVGRQ31krp60q9oH4zy6WgN2JbybgSU2Xd79MCNhuGUoC5yuFCJMftxW0CBvNPN1qsw==
+"@lodestar/params@1.46.0", "@lodestar/params@^1.46.0":
+  version "1.46.0"
+  resolved "https://registry.npmjs.org/@lodestar/params/-/params-1.46.0.tgz#28282d633145b928ffcd9f940b244c70d5e8ecb9"
+  integrity sha512-eyJrn62yNZr+0KxzSKAtDkxzzMoo9T1Bz2N51mQAamp+eP6gFWPRKwegRc323SCALO41Jb1ELaECane2D7dQzA==
 
-"@lodestar/types@1.46.0-rc.1":
-  version "1.46.0-rc.1"
-  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.46.0-rc.1.tgz#69448192f5690d4ba3250d24945b5a3995e8b0c3"
-  integrity sha512-jtsmeGdZfXNi9xztoLr8QqrxUqbV5CGr/MrGcFbusc02no+OekpIgapwARRga9jHgsahqsqJZf0Z6hv7eYDHOQ==
+"@lodestar/types@1.46.0":
+  version "1.46.0"
+  resolved "https://registry.npmjs.org/@lodestar/types/-/types-1.46.0.tgz#5bc0e8c8b3206123b367fc36db91e72169f7f25f"
+  integrity sha512-Ga48V+1MNftO0a3cCS3CSLMpLihohsWAl1jOIFz47Jvz8xFDjXOATXmv+AlxNm4CbwmKLIEBL2e5UH0kRh85vw==
   dependencies:
     "@chainsafe/ssz" "^1.6.2"
-    "@lodestar/params" "^1.46.0-rc.1"
+    "@lodestar/params" "^1.46.0"
     ethereum-cryptography "^2.0.0"
 
 "@lukeed/csprng@^1.0.0":
