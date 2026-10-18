@@ -373,7 +373,9 @@ export class ProverService implements OnModuleInit {
       processing_type: 'eligibility_check',
     });
 
-    const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
+    // A Gloas state keeps its validators in a progressive list. Its tree view has `get` but no
+    // `getReadonly`, so `get` is the read that works for every fork.
+    const deadlineStateValidator = stateView.validators.get(validatorIndex);
 
     // Check if validator already exited
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
@@ -1313,7 +1315,8 @@ export class ProverService implements OnModuleInit {
 
     for (const validator of validators) {
       const validatorIndex = Number(validator.validatorIndex);
-      const stateValidator = stateView.validators.getReadonly(validatorIndex);
+      // `get`, not `getReadonly`: a Gloas state's progressive list of validators has no `getReadonly`.
+      const stateValidator = stateView.validators.get(validatorIndex);
       const activationEpoch = stateValidator.activationEpoch;
       const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
       const withdrawableEpoch = stateValidator.withdrawableEpoch;

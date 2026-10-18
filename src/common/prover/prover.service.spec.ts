@@ -34,7 +34,7 @@ const makeValidatorInput = (
 // Minimal stateView mock: returns a validator with a given exitEpoch
 const makeStateView = (exitEpoch: number | typeof Infinity) => ({
   validators: {
-    getReadonly: jest.fn(() => ({
+    get: jest.fn(() => ({
       exitEpoch,
       withdrawalCredentials: new Uint8Array(32),
       effectiveBalance: BigInt(32_000_000_000),
@@ -167,6 +167,66 @@ describe('ProverService.processValidator - exit epoch filtering', () => {
     expect(service.prometheus.validatorsSkippedCount.inc).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: 'already_exited' }),
     );
+  });
+
+  // The mock above has any method the code asks for. A Gloas state keeps its validators in a
+  // progressive list, whose tree view has `get` but no `getReadonly`: only a real view shows that.
+  it.each(['fulu', 'gloas'])('reads the validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: ACTIVATION_EPOCH,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService();
+    const result = await (service as any).processValidator(
+      makeValidatorInput({ validatorIndex: BigInt(1) }),
+      ACTIVATION_EPOCH,
+      DEADLINE_EPOCH,
+      type.deserializeToView(type.serialize(state)),
+      0, // too early: the method reads the validator, passes the exit checks and stops at eligibility
+      DELIVERED_TIMESTAMP,
+      0,
+      100,
+    );
+    expect(result).toBeNull();
+    expect(service.prometheus.validatorsSkippedCount.inc).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'not_eligible_yet' }),
+    );
+  });
+});
+
+// ─── groupValidatorsByDeadlineSlot — real state views ────────────────────────
+
+describe('ProverService.groupValidatorsByDeadlineSlot - real state views', () => {
+  // The first read of each exit request's validators. A Gloas state keeps them in a progressive list,
+  // whose tree view has `get` but no `getReadonly`.
+  it.each(['fulu', 'gloas'])('reads each validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: 10,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService({ consensus: { slotToEpoch: jest.fn((slot: number) => Math.floor(slot / 32)) } });
+    service.getContractForModule = jest.fn(() => ({ exitDeadlineThreshold: jest.fn(async () => 3600) }));
+    const grouped = await service.groupValidatorsByDeadlineSlot(
+      [makeValidatorInput({ validatorIndex: BigInt(1) })],
+      1_700_000_000,
+      type.deserializeToView(type.serialize(state)),
+      {},
+      0,
+      100,
+    );
+    expect([...grouped.values()].map(({ validators }) => validators.map((entry) => entry.activationEpoch))).toEqual([[10]]);
   });
 });
 
