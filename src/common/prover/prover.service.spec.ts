@@ -15,6 +15,9 @@ const makePrometheusMock = () => ({
   validatorsPenaltyApplicableCount: { inc: jest.fn() },
   proofGenerationDuration: { startTimer: jest.fn(() => jest.fn()) },
   proofGenerationCount: { inc: jest.fn() },
+  validatorGroupProcessingDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateFetchDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateDeserializationDuration: { startTimer: jest.fn(() => jest.fn()) },
 });
 
 const makeLogger = () => ({ log: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() });
@@ -226,7 +229,11 @@ describe('ProverService.groupValidatorsByDeadlineSlot - real state views', () =>
       0,
       100,
     );
-    expect([...grouped.values()].map(({ validators }) => validators.map((entry) => entry.activationEpoch))).toEqual([[10]]);
+    expect(
+      [...grouped.values()].map(({ validators }) =>
+        validators.map((entry: { activationEpoch: number }) => entry.activationEpoch),
+      ),
+    ).toEqual([[10]]);
   });
 });
 
@@ -475,7 +482,7 @@ const runDeadlineSlot = async (deadlineSlot: number, head: number) => {
   const { service, call } = makeAnchorService({ head });
   service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async () => 0) };
   jest.spyOn(service, 'processValidatorGroup').mockResolvedValue({
-    validatorWitnesses: [{}],
+    validatorWitnesses: [[{}]],
     processedValidators: 1,
     skippedValidators: 0,
   });
@@ -513,6 +520,44 @@ describe('ProverService.processDeadlineSlot', () => {
       rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
     });
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  // The verifier checks each witness against the exit request of its call: the entry at its index
+  // in that request's data, and that request's delivery time. Two requests delivered in one slot
+  // share a deadline slot, so they share the proven block and its state, but not the call.
+  it('proves each exit request of a deadline slot in its own call', async () => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const { service } = makeAnchorService({ head: PROVABLE_SLOT + 100 });
+    const getState = jest.fn(async () => ({
+      forkName: 'gloas',
+      bodyBytes: ssz.gloas.BeaconState.serialize(ssz.gloas.BeaconState.defaultValue()),
+    }));
+    service.consensus.getState = getState;
+    const delivered: Record<string, number> = { '0xa': 1_000, '0xb': 2_000 };
+    service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async (hash: string) => delivered[hash]) };
+    jest
+      .spyOn(service, 'processValidator')
+      .mockImplementation(async (validator: any, _activation, _deadline, _view, _proofTime, deliveredAt) => ({
+        pubkey: validator.validatorPubkey,
+        deliveredAt,
+      }));
+    const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
+    const request = (hash: string, pubkey: string) => ({
+      exitRequest: { exitRequestsHash: hash, exitRequestsData: { data: `${hash}data`, dataFormat: 2 } },
+      validators: [
+        { validator: makeValidatorInput({ validatorPubkey: pubkey }), activationEpoch: 1, exitDeadlineEpoch: 2 },
+      ],
+    });
+    const first = request('0xa', '0xa1');
+    const second = request('0xb', '0xb1');
+
+    await service.processDeadlineSlot(PROVABLE_SLOT, [first, second], {}, {}, ssz, 0, 0);
+
+    expect(processCurrentSlot.mock.calls.map(([witnesses, exitRequest]) => [witnesses, exitRequest])).toEqual([
+      [[{ pubkey: '0xa1', deliveredAt: 1_000 }], first.exitRequest],
+      [[{ pubkey: '0xb1', deliveredAt: 2_000 }], second.exitRequest],
+    ]);
+    expect(getState).toHaveBeenCalledTimes(1);
   });
 });
 

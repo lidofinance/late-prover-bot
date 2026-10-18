@@ -223,24 +223,30 @@ export class ProverService implements OnModuleInit {
     return Math.floor(secondsSinceGenesis / Number(this.consensus.beaconConfig.SECONDS_PER_SLOT));
   }
 
+  /**
+   * Build the witnesses of the validators of each exit request of a deadline slot, from one state of
+   * the slot. The witnesses come back per request, in the order of `requestGroups`.
+   */
   private async processValidatorGroup(
-    validatorGroup: {
-      validator: ReturnType<typeof this.decodeValidatorsData>[0];
-      activationEpoch: number;
-      exitDeadlineEpoch: number;
+    requestGroups: {
+      validators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[];
+      deliveredTimestamp: number;
     }[],
     deadlineSlot: number,
     proofSlotTimestamp: number,
-    deliveredTimestamp: number,
     fromBlock: number,
     toBlock: number,
   ): Promise<{
-    validatorWitnesses: ValidatorWitness[];
+    validatorWitnesses: ValidatorWitness[][];
     processedValidators: number;
     skippedValidators: number;
   }> {
     const groupStartTime = Date.now();
-    const groupSize = validatorGroup.length;
+    const groupSize = requestGroups.reduce((size, { validators }) => size + validators.length, 0);
     const groupSizeRange = getSizeRangeCategory(groupSize);
 
     // Track validator group processing
@@ -252,7 +258,8 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
         `\n  Slot: ${deadlineSlot}` +
-        `\n  Validators in group: ${validatorGroup.length}`,
+        `\n  Exit requests in group: ${requestGroups.length}` +
+        `\n  Validators in group: ${groupSize}`,
     );
 
     // Track eligible validators
@@ -288,9 +295,9 @@ export class ProverService implements OnModuleInit {
           `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
       );
       return {
-        validatorWitnesses: [],
+        validatorWitnesses: requestGroups.map(() => []),
         processedValidators: 0,
-        skippedValidators: validatorGroup.length,
+        skippedValidators: groupSize,
       };
     } finally {
       stopDeserialization();
@@ -305,39 +312,42 @@ export class ProverService implements OnModuleInit {
         `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`,
       );
       return {
-        validatorWitnesses: [],
+        validatorWitnesses: requestGroups.map(() => []),
         processedValidators: 0,
-        skippedValidators: validatorGroup.length,
+        skippedValidators: groupSize,
       };
     }
 
-    const validatorWitnesses: ValidatorWitness[] = [];
+    const validatorWitnesses: ValidatorWitness[][] = requestGroups.map(() => []);
     let processedValidators = 0;
     let skippedValidators = 0;
 
-    for (const { validator, activationEpoch, exitDeadlineEpoch } of validatorGroup) {
-      const witness = await this.processValidator(
-        validator,
-        activationEpoch,
-        exitDeadlineEpoch,
-        deadlineStateView,
-        proofSlotTimestamp,
-        deliveredTimestamp,
-        fromBlock,
-        toBlock,
-      );
+    for (let i = 0; i < requestGroups.length; i++) {
+      const { validators, deliveredTimestamp } = requestGroups[i];
+      for (const { validator, activationEpoch, exitDeadlineEpoch } of validators) {
+        const witness = await this.processValidator(
+          validator,
+          activationEpoch,
+          exitDeadlineEpoch,
+          deadlineStateView,
+          proofSlotTimestamp,
+          deliveredTimestamp,
+          fromBlock,
+          toBlock,
+        );
 
-      if (witness) {
-        validatorWitnesses.push(witness);
-        processedValidators++;
+        if (witness) {
+          validatorWitnesses[i].push(witness);
+          processedValidators++;
 
-        // Track processed validator
-        this.prometheus.validatorsProcessedCount.inc({
-          module_id: validator.moduleId.toString(),
-          processing_type: 'proof_generation',
-        });
-      } else {
-        skippedValidators++;
+          // Track processed validator
+          this.prometheus.validatorsProcessedCount.inc({
+            module_id: validator.moduleId.toString(),
+            processing_type: 'proof_generation',
+          });
+        } else {
+          skippedValidators++;
+        }
       }
     }
 
@@ -783,7 +793,9 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * Process a single deadline slot with all its validators
+   * Process a single deadline slot with all its validators. The exit requests of the slot share the
+   * proven block and its state, but each one gets its own verifier calls: the verifier checks every
+   * witness of a call against the data and the delivery time of the call's exit request.
    */
   private async processDeadlineSlot(
     deadlineSlot: number,
@@ -794,23 +806,25 @@ export class ProverService implements OnModuleInit {
     fromBlock: number,
     toBlock: number,
   ): Promise<{ processedValidators: number; skippedValidators: number }> {
-    // Combine all validators for this deadline slot from all exit requests
-    let allValidators: {
-      validator: ReturnType<typeof this.decodeValidatorsData>[0];
-      activationEpoch: number;
-      exitDeadlineEpoch: number;
+    const requestGroups: {
+      exitRequest: any;
+      validators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[];
+      deliveredTimestamp: number;
     }[] = [];
-    let exitRequest: any = null;
 
     for (const groupData of groupDataArray) {
-      allValidators = allValidators.concat(groupData.validators);
-      if (!exitRequest) {
-        exitRequest = groupData.exitRequest; // Use the first exit request for the group
-      }
+      requestGroups.push({
+        exitRequest: groupData.exitRequest,
+        validators: groupData.validators,
+        deliveredTimestamp: await this.exitRequests.getExitRequestDeliveryTimestamp(
+          groupData.exitRequest.exitRequestsHash,
+        ),
+      });
     }
-
-    // Get delivery timestamp from the first exit request
-    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
 
     // An old block is proven through the historical summaries of the finalized anchor, so only a
     // recent one needs its own entry in the beacon roots predeploy - an old one's is long evicted
@@ -822,41 +836,49 @@ export class ProverService implements OnModuleInit {
     // Use the slot the validator state is proven at for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
 
-    // Process all combined validators for this deadline slot
+    // Build the witnesses of every exit request of this deadline slot from one state
     const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
-      allValidators,
+      requestGroups,
       actualSlot,
       proofSlotTimestamp,
-      deliveredTimestamp,
       fromBlock,
       toBlock,
     );
 
-    if (validatorWitnesses.length === 0) {
+    if (validatorWitnesses.every((witnesses) => witnesses.length === 0)) {
       return { processedValidators: 0, skippedValidators: 0 };
     }
 
-    if (anchor) {
-      const provableDeadlineBlockHeader = {
-        header: {
-          slot: actualSlot,
-          proposerIndex: Number(anchor.header.header.message.proposer_index),
-          parentRoot: anchor.header.header.message.parent_root,
-          stateRoot: anchor.header.header.message.state_root,
-          bodyRoot: anchor.header.header.message.body_root,
-        },
-        rootsTimestamp: anchor.rootsTimestamp,
-      };
-      await this.processCurrentSlot(validatorWitnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
-    } else {
-      await this.processHistoricalSlot(
-        deadlineBlock,
-        validatorWitnesses,
-        exitRequest,
-        finalizedStateView,
-        provableFinalizedBlockHeader,
-        ssz,
-      );
+    const provableDeadlineBlockHeader = anchor && {
+      header: {
+        slot: actualSlot,
+        proposerIndex: Number(anchor.header.header.message.proposer_index),
+        parentRoot: anchor.header.header.message.parent_root,
+        stateRoot: anchor.header.header.message.state_root,
+        bodyRoot: anchor.header.header.message.body_root,
+      },
+      rootsTimestamp: anchor.rootsTimestamp,
+    };
+
+    for (let i = 0; i < requestGroups.length; i++) {
+      const { exitRequest } = requestGroups[i];
+      const witnesses = validatorWitnesses[i];
+      if (witnesses.length === 0) {
+        continue;
+      }
+
+      if (provableDeadlineBlockHeader) {
+        await this.processCurrentSlot(witnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
+      } else {
+        await this.processHistoricalSlot(
+          deadlineBlock,
+          witnesses,
+          exitRequest,
+          finalizedStateView,
+          provableFinalizedBlockHeader,
+          ssz,
+        );
+      }
     }
 
     return { processedValidators, skippedValidators };
