@@ -2,34 +2,59 @@ import type { ValueOfFields } from '@chainsafe/ssz/lib/view/container';
 import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import type { ssz as sszType } from '@lodestar/types';
 import { Inject, Injectable, LoggerService, OnModuleInit, Optional } from '@nestjs/common';
+import { hexlify } from 'ethers/lib/utils';
 import { IncomingHttpHeaders } from 'undici/types/header';
 import BodyReadable from 'undici/types/readable';
 
 import { BeaconConfig, BlockHeaderResponse, BlockId, GenesisResponse, StateId } from './response.interface';
 import { ConfigService } from '../../config/config.service';
 import { PrometheusService, TrackCLRequest } from '../../prometheus';
-import { BaseRestProvider } from '../base/rest-provider';
+import { BaseRestProvider, RequestError } from '../base/rest-provider';
 import { RequestOptions } from '../base/utils/func';
 
 let ssz: typeof sszType;
 
-enum SupportedFork {
+export enum SupportedFork {
   capella = 'capella',
   deneb = 'deneb',
   electra = 'electra',
   fulu = 'fulu',
+  gloas = 'gloas',
 }
 
 export type SupportedBlock =
   | ValueOfFields<typeof ssz.capella.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.deneb.BeaconBlock.fields>
   | ValueOfFields<typeof ssz.electra.BeaconBlock.fields>
-  | ValueOfFields<typeof ssz.fulu.BeaconBlock.fields>;
+  | ValueOfFields<typeof ssz.fulu.BeaconBlock.fields>
+  | ValueOfFields<typeof ssz.gloas.BeaconBlock.fields>;
 
 export interface State {
   bodyBytes: Uint8Array;
   forkName: SupportedFork;
 }
+
+/** How many slots to scan forward before giving up on finding a proposed block (one epoch). */
+const MAX_SLOTS_SCANNED_FORWARD = 32;
+
+/**
+ * The block body fields this service reads: the payload up to Fulu, the bid from Gloas on.
+ * `SupportedBlock` has no discriminant to narrow on, hence the cast.
+ */
+interface BlockBodyFields {
+  executionPayload?: { blockHash: Uint8Array };
+  signedExecutionPayloadBid?: { message: { blockHash: Uint8Array; parentBlockHash: Uint8Array } };
+}
+
+const blockBody = (block: SupportedBlock): BlockBodyFields => block.body as unknown as BlockBodyFields;
+
+/** The execution payload a pre-EIP-7732 block embeds; `undefined` from Gloas on. */
+export const getExecutionPayload = (block: SupportedBlock): BlockBodyFields['executionPayload'] =>
+  blockBody(block).executionPayload;
+
+/** The bid a Gloas block commits to; `undefined` before EIP-7732. */
+export const getExecutionPayloadBid = (block: SupportedBlock): BlockBodyFields['signedExecutionPayloadBid'] =>
+  blockBody(block).signedExecutionPayloadBid;
 
 @Injectable()
 export class Consensus extends BaseRestProvider implements OnModuleInit {
@@ -97,7 +122,7 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
     return jsonBody.data;
   }
 
-  public async getBlockInfo(blockId: BlockId): Promise<SupportedBlock> {
+  public async getBlockInfo(blockId: BlockId): Promise<{ block: SupportedBlock; forkName: SupportedFork }> {
     const { body, headers } = await this.retryRequest((baseUrl) =>
       this.baseGet(baseUrl, this.endpoints.blockInfo(blockId)),
     );
@@ -106,7 +131,70 @@ export class Consensus extends BaseRestProvider implements OnModuleInit {
       throw new Error(`Fork name [${forkName}] is not supported`);
     }
     const jsonBody = (await body.json()) as { data: { message: JSON } };
-    return ssz[forkName as SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
+    const block = ssz[forkName as SupportedFork].BeaconBlock.fromJson(jsonBody.data.message);
+    return { block, forkName: forkName as SupportedFork };
+  }
+
+  /**
+   * Find the next proposed (non-missed) slot at or after `startSlot` and return its header.
+   */
+  public async findNextAvailableHeader(
+    startSlot: number,
+    maxAttempts: number = MAX_SLOTS_SCANNED_FORWARD,
+  ): Promise<{ slot: number; header: BlockHeaderResponse }> {
+    let currentSlot = startSlot;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const header = await this.getBeaconHeader(currentSlot.toString());
+        this.logger.log(
+          `Found available slot ${currentSlot}` +
+            (currentSlot !== startSlot ? ` (requested: ${startSlot}, missed: ${currentSlot - startSlot})` : ''),
+        );
+        return { slot: currentSlot, header };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        // Only retry for 404 errors (missed slots), throw all other errors
+        if (!(error instanceof RequestError && error.statusCode === 404)) {
+          throw error;
+        }
+
+        this.logger.debug?.(`Slot ${currentSlot} is missed (404), trying next slot`);
+        currentSlot++;
+      }
+    }
+
+    throw new Error(
+      `Failed to find available slot after ${maxAttempts} attempts starting from slot ${startSlot}. Last error: ${lastError?.message}`,
+    );
+  }
+
+  /**
+   * The execution block the given beacon block is anchored on - the EL head as of that CL block.
+   *
+   * Before EIP-7732 it is the embedded payload. From Gloas on it is `state.latest_block_hash`, which
+   * `process_execution_payload_bid` asserts equal to `bid.parent_block_hash`, so it is read from the
+   * body instead of the state. The anchor then lags the block by a slot or more, which only makes a
+   * scan range end short; the next cycle picks up the rest.
+   */
+  public async getExecutionBlockHash(header: BlockHeaderResponse): Promise<string> {
+    const { block } = await this.getBlockInfo(header.root);
+
+    const payload = getExecutionPayload(block);
+    if (payload) {
+      return hexlify(payload.blockHash);
+    }
+
+    const bid = getExecutionPayloadBid(block);
+    if (!bid) {
+      throw new Error(
+        `Block at slot [${header.header.message.slot}] carries neither an execution payload nor a payload bid`,
+      );
+    }
+
+    return hexlify(bid.message.parentBlockHash);
   }
 
   public async getBeaconHeader(blockId: BlockId): Promise<BlockHeaderResponse> {

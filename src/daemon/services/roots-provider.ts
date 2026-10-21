@@ -5,14 +5,9 @@ import { PrometheusService } from 'common/prometheus';
 
 import { LastProcessedRoot } from './last-processed-root';
 import { ConfigService } from '../../common/config/config.service';
+import { EARLIEST_ANCHORABLE_SLOT } from '../../common/helpers/el-anchor';
 import { Consensus } from '../../common/providers/consensus/consensus';
 import { BlockHeaderResponse } from '../../common/providers/consensus/response.interface';
-
-/**
- * Lowest slot the daemon may start from. Not zero: the genesis block carries a default-constructed
- * body, so its execution block hash is all zeroes and cannot be resolved into an execution anchor.
- */
-const EARLIEST_ANCHORABLE_SLOT = 1;
 
 @Injectable()
 export class RootsProvider {
@@ -85,11 +80,13 @@ export class RootsProvider {
     const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
 
     try {
-      const header = await this.consensus.getBeaconHeader(lookbackSlot.toString());
+      // The lookback slot may have been missed, and a missed slot 404s
+      const { slot, header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
       if (header) {
         this.logger.log(
           `Using lookback slot from ${lookbackDays} days ago:` +
-            `\n  Slot: ${lookbackSlot}` +
+            `\n  Requested slot: ${lookbackSlot}` +
+            `\n  Slot: ${slot}` +
             `\n  Root: [${header.root}]`,
         );
         return header;
