@@ -15,6 +15,9 @@ const makePrometheusMock = () => ({
   validatorsPenaltyApplicableCount: { inc: jest.fn() },
   proofGenerationDuration: { startTimer: jest.fn(() => jest.fn()) },
   proofGenerationCount: { inc: jest.fn() },
+  validatorGroupProcessingDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateFetchDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateDeserializationDuration: { startTimer: jest.fn(() => jest.fn()) },
 });
 
 const makeLogger = () => ({ log: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() });
@@ -34,7 +37,7 @@ const makeValidatorInput = (
 // Minimal stateView mock: returns a validator with a given exitEpoch
 const makeStateView = (exitEpoch: number | typeof Infinity) => ({
   validators: {
-    getReadonly: jest.fn(() => ({
+    get: jest.fn(() => ({
       exitEpoch,
       withdrawalCredentials: new Uint8Array(32),
       effectiveBalance: BigInt(32_000_000_000),
@@ -167,6 +170,70 @@ describe('ProverService.processValidator - exit epoch filtering', () => {
     expect(service.prometheus.validatorsSkippedCount.inc).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: 'already_exited' }),
     );
+  });
+
+  // The mock above has any method the code asks for. A Gloas state keeps its validators in a
+  // progressive list, whose tree view has `get` but no `getReadonly`: only a real view shows that.
+  it.each(['fulu', 'gloas'])('reads the validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: ACTIVATION_EPOCH,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService();
+    const result = await (service as any).processValidator(
+      makeValidatorInput({ validatorIndex: BigInt(1) }),
+      ACTIVATION_EPOCH,
+      DEADLINE_EPOCH,
+      type.deserializeToView(type.serialize(state)),
+      0, // too early: the method reads the validator, passes the exit checks and stops at eligibility
+      DELIVERED_TIMESTAMP,
+      0,
+      100,
+    );
+    expect(result).toBeNull();
+    expect(service.prometheus.validatorsSkippedCount.inc).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'not_eligible_yet' }),
+    );
+  });
+});
+
+// ─── groupValidatorsByDeadlineSlot — real state views ────────────────────────
+
+describe('ProverService.groupValidatorsByDeadlineSlot - real state views', () => {
+  // The first read of each exit request's validators. A Gloas state keeps them in a progressive list,
+  // whose tree view has `get` but no `getReadonly`.
+  it.each(['fulu', 'gloas'])('reads each validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: 10,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService({ consensus: { slotToEpoch: jest.fn((slot: number) => Math.floor(slot / 32)) } });
+    service.getContractForModule = jest.fn(() => ({ exitDeadlineThreshold: jest.fn(async () => 3600) }));
+    const grouped = await service.groupValidatorsByDeadlineSlot(
+      [makeValidatorInput({ validatorIndex: BigInt(1) })],
+      1_700_000_000,
+      type.deserializeToView(type.serialize(state)),
+      {},
+      0,
+      100,
+    );
+    expect(
+      [...grouped.values()].map(({ validators }) =>
+        validators.map((entry: { activationEpoch: number }) => entry.activationEpoch),
+      ),
+    ).toEqual([[10]]);
   });
 });
 
@@ -415,7 +482,7 @@ const runDeadlineSlot = async (deadlineSlot: number, head: number) => {
   const { service, call } = makeAnchorService({ head });
   service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async () => 0) };
   jest.spyOn(service, 'processValidatorGroup').mockResolvedValue({
-    validatorWitnesses: [{}],
+    validatorWitnesses: [[{}]],
     processedValidators: 1,
     skippedValidators: 0,
   });
@@ -453,6 +520,44 @@ describe('ProverService.processDeadlineSlot', () => {
       rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
     });
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  // The verifier checks each witness against the exit request of its call: the entry at its index
+  // in that request's data, and that request's delivery time. Two requests delivered in one slot
+  // share a deadline slot, so they share the proven block and its state, but not the call.
+  it('proves each exit request of a deadline slot in its own call', async () => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const { service } = makeAnchorService({ head: PROVABLE_SLOT + 100 });
+    const getState = jest.fn(async () => ({
+      forkName: 'gloas',
+      bodyBytes: ssz.gloas.BeaconState.serialize(ssz.gloas.BeaconState.defaultValue()),
+    }));
+    service.consensus.getState = getState;
+    const delivered: Record<string, number> = { '0xa': 1_000, '0xb': 2_000 };
+    service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async (hash: string) => delivered[hash]) };
+    jest
+      .spyOn(service, 'processValidator')
+      .mockImplementation(async (validator: any, _activation, _deadline, _view, _proofTime, deliveredAt) => ({
+        pubkey: validator.validatorPubkey,
+        deliveredAt,
+      }));
+    const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
+    const request = (hash: string, pubkey: string) => ({
+      exitRequest: { exitRequestsHash: hash, exitRequestsData: { data: `${hash}data`, dataFormat: 2 } },
+      validators: [
+        { validator: makeValidatorInput({ validatorPubkey: pubkey }), activationEpoch: 1, exitDeadlineEpoch: 2 },
+      ],
+    });
+    const first = request('0xa', '0xa1');
+    const second = request('0xb', '0xb1');
+
+    await service.processDeadlineSlot(PROVABLE_SLOT, [first, second], {}, {}, ssz, 0, 0);
+
+    expect(processCurrentSlot.mock.calls.map(([witnesses, exitRequest]) => [witnesses, exitRequest])).toEqual([
+      [[{ pubkey: '0xa1', deliveredAt: 1_000 }], first.exitRequest],
+      [[{ pubkey: '0xb1', deliveredAt: 2_000 }], second.exitRequest],
+    ]);
+    expect(getState).toHaveBeenCalledTimes(1);
   });
 });
 
