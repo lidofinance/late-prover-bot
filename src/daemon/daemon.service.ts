@@ -106,6 +106,9 @@ export class DaemonService implements OnModuleInit {
     };
 
     this.prometheus.buildInfo.labels(buildInfoLabels).setToCurrentTime();
+
+    this.logger.log('Init app', { name, version, branch, commit, env });
+    this.logger.log('Init app dumping envs', this.config.dump());
   }
 
   public async run() {

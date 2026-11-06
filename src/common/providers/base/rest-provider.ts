@@ -4,7 +4,7 @@ import { IncomingHttpHeaders } from 'undici/types/header';
 import BodyReadable from 'undici/types/readable';
 
 import { RequestOptions, RequestPolicy, rejectDelay, retrier, urljoin } from './utils/func';
-import { PrometheusService } from '../../prometheus';
+import { PrometheusService, USER_AGENT } from '../../prometheus';
 
 export type RetryOptions = RequestOptions &
   RequestPolicy & {
@@ -101,7 +101,7 @@ export abstract class BaseRestProvider {
       method: 'GET',
       headersTimeout: (options.requestPolicy as RequestPolicy).timeout,
       signal: options.signal,
-      headers: options.headers,
+      headers: { 'User-Agent': USER_AGENT, ...options.headers },
     });
     if (statusCode !== 200) {
       const hostname = new URL(base).hostname;
@@ -129,6 +129,7 @@ export abstract class BaseRestProvider {
       signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
       },
       body: JSON.stringify(requestBody),
     });
