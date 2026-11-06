@@ -1,3 +1,5 @@
+// TODO: the satanizer is being moved into the @lido-nestjs packages; switch to it there and drop the
+// @lidofinance/satanizer dependency once that release is out.
 import { commonPatterns, satanizer } from '@lidofinance/satanizer';
 
 /**
