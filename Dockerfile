@@ -1,9 +1,7 @@
-# The same base in every stage, written out in full: the hadolint of the CI does not resolve a global ARG in FROM
 FROM node:22.23.4-trixie-slim AS building
 
 WORKDIR /app
 
-# Manifests before the source, so a source change does not bust the dependency layer
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --non-interactive && yarn cache clean
 
@@ -13,7 +11,6 @@ COPY src ./src
 
 RUN yarn typechain && yarn build
 
-# Production-only dependency tree for the runtime stage
 FROM node:22.23.4-trixie-slim AS proddeps
 
 WORKDIR /app
@@ -34,20 +31,15 @@ COPY --from=building /app/dist ./dist
 COPY --from=proddeps /app/node_modules ./node_modules
 COPY package.json ./
 
-# Build metadata for the startup log and the build_info metric. The platform build workflow passes the three build
-# args together; regenerate build-info.json from them. A build without any of them keeps the file from the checkout
-# (the placeholders, or the values written by the release pipeline before the build). A partial set is a mistake
-# and fails the build.
+# Without build args the file from the checkout must survive: the release pipeline of the VM image rewrites it
+# before the build and passes no args.
 ARG BUILD_VERSION
 ARG BUILD_BRANCH
 ARG BUILD_COMMIT
 COPY build-info.json ./
+COPY docker/healthcheck.js docker/write-build-info.js ./docker/
 RUN if [ -n "$BUILD_VERSION$BUILD_BRANCH$BUILD_COMMIT" ]; then \
-      if [ -z "$BUILD_VERSION" ] || [ -z "$BUILD_BRANCH" ] || [ -z "$BUILD_COMMIT" ]; then \
-        echo "BUILD_VERSION, BUILD_BRANCH and BUILD_COMMIT must be set together" >&2; exit 1; \
-      fi; \
-      printf '{"version":"%s","branch":"%s","commit":"%s"}\n' \
-        "$BUILD_VERSION" "$BUILD_BRANCH" "$BUILD_COMMIT" > build-info.json; \
+      node docker/write-build-info.js "$BUILD_VERSION" "$BUILD_BRANCH" "$BUILD_COMMIT"; \
     fi
 
 EXPOSE 8080
@@ -55,7 +47,6 @@ EXPOSE 8080
 # The node user of the base image, by number so that a runAsNonRoot check can verify it without runAsUser
 USER 1000:1000
 
-HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
-  CMD ["node", "-e", "fetch(`http://127.0.0.1:${process.env.HTTP_PORT || 8080}/health`).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 CMD ["node", "docker/healthcheck.js"]
 
 CMD ["node", "--max-old-space-size=8192", "--experimental-vm-modules", "dist/main"]
