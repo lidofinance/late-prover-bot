@@ -129,6 +129,19 @@ describe('validate', () => {
     );
   });
 
+  it('checks the format of a key that is given in dry run too', () => {
+    const badKey = '0x' + 'zz'.repeat(32);
+
+    expect(() => validate({ ...baseConfig(), DRY_RUN: 'true', TX_SIGNER_PRIVATE_KEY: badKey })).toThrow('exit 1');
+    expect(stderrText()).toContain('TX_SIGNER_PRIVATE_KEY');
+    expect(stderrText()).not.toContain(badKey);
+
+    expect(validate({ ...baseConfig(), DRY_RUN: 'true' }).TX_SIGNER_PRIVATE_KEY).toBe(KEY);
+    expect(
+      validate({ ...baseConfig(), DRY_RUN: 'true', TX_SIGNER_PRIVATE_KEY: undefined }).TX_SIGNER_PRIVATE_KEY,
+    ).toBeUndefined();
+  });
+
   it('lists every variable of the class in ENV_KEYS', () => {
     const config = validate({
       ...baseConfig(),

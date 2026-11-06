@@ -34,6 +34,8 @@ export enum WorkingMode {
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 
+const hasValue = (value: unknown): boolean => value !== undefined && value !== null && value !== '';
+
 export class EnvironmentVariables {
   @IsEnum(Environment)
   NODE_ENV: Environment = Environment.Development;
@@ -51,11 +53,12 @@ export class EnvironmentVariables {
   public LIDO_LOCATOR_ADDRESS: string;
 
   // The format rule stops a malformed key here, where the error is masked. Later, ethers would quote the value in
-  // its "invalid hexlify value" error before the app logger exists.
+  // its "invalid hexlify value" error before the app logger exists. The key is optional only in dry run; a key
+  // that is given is always checked, because the signer is built from it in both modes.
   @IsNotEmpty()
   @IsString()
   @Matches(/^(0x)?[0-9a-fA-F]{64}$/)
-  @ValidateIf((vars) => !vars.DRY_RUN)
+  @ValidateIf((vars) => !vars.DRY_RUN || hasValue(vars.TX_SIGNER_PRIVATE_KEY))
   public TX_SIGNER_PRIVATE_KEY: string;
 
   /** Path to a file with the value of TX_SIGNER_PRIVATE_KEY; the file wins over the variable (see env.files.ts) */
