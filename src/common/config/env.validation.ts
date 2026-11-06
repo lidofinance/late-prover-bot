@@ -147,10 +147,12 @@ export class EnvironmentVariables {
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public EL_RPC_RETRY_DELAY_MS = 500;
 
+  // 120 s is what ethers used before this variable reached the provider: the bot reads logs in ranges of
+  // thousands of blocks, and a shorter timeout would turn slow answers into retries
   @IsNumber()
   @Min(1000)
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
-  public EL_RPC_RESPONSE_TIMEOUT_MS = MINUTE;
+  public EL_RPC_RESPONSE_TIMEOUT_MS = 2 * MINUTE;
 
   /** Attempts per EL provider before the switch to the next one (the first try included) */
   @IsInt()

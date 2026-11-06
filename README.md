@@ -154,7 +154,7 @@ docker build \
 | `EL_RPC_URLS` | Comma-separated execution layer RPC URLs | yes | |
 | `EL_RPC_URLS_FILE` | Path to a file with the value of `EL_RPC_URLS`; the file wins over the variable | no | |
 | `EL_RPC_RETRY_DELAY_MS` | First backoff before an EL RPC retry (milliseconds); it doubles on every retry | no | `500` |
-| `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout | no | `60000` |
+| `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout (milliseconds) | no | `120000` |
 | `EL_RPC_MAX_RETRIES` | Attempts per EL RPC provider before the switch to the next one, the first try included (1 to 20) | no | `3` |
 | `CL_API_URLS` | Comma-separated consensus layer API URLs | yes | |
 | `CL_API_URLS_FILE` | Path to a file with the value of `CL_API_URLS`; the file wins over the variable | no | |
