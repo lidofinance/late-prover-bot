@@ -1,6 +1,5 @@
-ARG NODE_IMAGE=node:22.23.4-trixie-slim
-
-FROM ${NODE_IMAGE} AS building
+# The same base in every stage, written out in full: the hadolint of the CI does not resolve a global ARG in FROM
+FROM node:22.23.4-trixie-slim AS building
 
 WORKDIR /app
 
@@ -15,14 +14,14 @@ COPY src ./src
 RUN yarn typechain && yarn build
 
 # Production-only dependency tree for the runtime stage
-FROM ${NODE_IMAGE} AS proddeps
+FROM node:22.23.4-trixie-slim AS proddeps
 
 WORKDIR /app
 
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --non-interactive --production && yarn cache clean
 
-FROM ${NODE_IMAGE} AS production
+FROM node:22.23.4-trixie-slim AS production
 
 # The app starts with node. npm, yarn and corepack are not needed at runtime, and the npm bundled with the base image
 # carries its own CVEs.
