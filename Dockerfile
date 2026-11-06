@@ -5,7 +5,6 @@ WORKDIR /app
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --non-interactive && yarn cache clean
 
-# build-info.json is resolved by the type check through the path alias "build-info"
 COPY tsconfig.json tsconfig.build.json nest-cli.json .swcrc build-info.json ./
 COPY src ./src
 
@@ -20,8 +19,6 @@ RUN yarn install --frozen-lockfile --non-interactive --production && yarn cache 
 
 FROM node:22.23.4-trixie-slim AS production
 
-# The app starts with node. npm, yarn and corepack are not needed at runtime, and the npm bundled with the base image
-# carries its own CVEs.
 RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     /usr/local/bin/corepack /opt/yarn-v*
 
@@ -31,8 +28,6 @@ COPY --from=building /app/dist ./dist
 COPY --from=proddeps /app/node_modules ./node_modules
 COPY package.json ./
 
-# Without build args the file from the checkout must survive: the release pipeline of the VM image rewrites it
-# before the build and passes no args.
 ARG BUILD_VERSION
 ARG BUILD_BRANCH
 ARG BUILD_COMMIT
