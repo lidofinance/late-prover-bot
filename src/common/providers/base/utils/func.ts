@@ -45,14 +45,17 @@ export const retrier = (
     try {
       return await callback();
     } catch (err: any) {
-      if (maxRetryCount <= 1 || minBackoffMs >= maxBackoffMs) {
+      if (maxRetryCount <= 1) {
         throw err;
       }
+      // The backoff doubles up to maxBackoffMs and then stays there: the retry count, not the backoff, ends the
+      // retries, so a provider that needs a minute to serve a fresh state is still reached.
+      const backoffMs = Math.min(minBackoffMs, maxBackoffMs);
       if (logWarning) {
-        logger.warn(err.message, `Retrying after (${minBackoffMs}ms). Remaining retries [${maxRetryCount}]`);
+        logger.warn(err.message, `Retrying after (${backoffMs}ms). Remaining retries [${maxRetryCount}]`);
       }
-      await sleep(minBackoffMs);
-      return await retrier(logger)(callback, maxRetryCount - 1, minBackoffMs * 2, maxBackoffMs, logWarning);
+      await sleep(backoffMs);
+      return await retrier(logger)(callback, maxRetryCount - 1, backoffMs * 2, maxBackoffMs, logWarning);
     }
   };
 };

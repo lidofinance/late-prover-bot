@@ -158,9 +158,9 @@ docker build \
 | `EL_RPC_MAX_RETRIES` | Attempts per EL RPC provider before the switch to the next one, the first try included (1 to 20) | no | `3` |
 | `CL_API_URLS` | Comma-separated consensus layer API URLs | yes | |
 | `CL_API_URLS_FILE` | Path to a file with the value of `CL_API_URLS`; the file wins over the variable | no | |
-| `CL_API_RETRY_DELAY_MS` | Delay between CL API retries | no | `500` |
+| `CL_API_RETRY_DELAY_MS` | First backoff before a CL API retry (milliseconds); it doubles on every retry up to 10 s | no | `500` |
 | `CL_API_RESPONSE_TIMEOUT_MS` | CL API response timeout | no | `60000` |
-| `CL_API_MAX_RETRIES` | Maximum CL API retries | no | `3` |
+| `CL_API_MAX_RETRIES` | Retries per CL API URL after the first attempt, before the switch to the next URL | no | `3` |
 | `FORK_NAME` | Ethereum consensus layer fork name (fallback if not in headers) | no | `electra` |
 | **Contracts** | | | |
 | `LIDO_LOCATOR_ADDRESS` | Lido Locator contract address | yes | |
