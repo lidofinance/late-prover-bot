@@ -46,17 +46,24 @@ describe('ConfigService.dump', () => {
     expect(text).not.toContain(KEY.slice(2));
     expect(text).not.toContain('secret-token-el');
     expect(text).not.toContain('secret-token-cl');
-    expect(dump.TX_SIGNER_PRIVATE_KEY).toMatch(/^\*+$/);
-    expect(dump.EL_RPC_URLS).toEqual([expect.stringMatching(/^\*+$/)]);
+    expect(dump.TX_SIGNER_PRIVATE_KEY).toBe('*'.repeat(KEY.length));
+    // No part of EL_URL is 16 characters or longer, so the URL has no key part and is masked whole
+    expect(dump.EL_RPC_URLS).toEqual(['*'.repeat(EL_URL.length)]);
     expect(dump.TX_SIGNER_PRIVATE_KEY_FILE).toBe('/vault/secrets/tx-signer-private-key');
     expect(dump.EL_RPC_URLS_FILE).toBe('/vault/secrets/el-rpc-urls');
     expect(dump.HTTP_PORT).toBe(8080);
     expect(dump.DRY_RUN).toBe(false);
   });
 
-  it('masks the locator address through the common address pattern (known trade-off)', () => {
-    // The platform masking patterns hide every 40+ character hex string, so the public LIDO_LOCATOR_ADDRESS is
-    // masked in the dump as well. It is visible in the build_info metric labels.
-    expect(makeService().dump().LIDO_LOCATOR_ADDRESS).toMatch(/^\*+$/);
+  it('keeps the public locator address readable', () => {
+    expect(makeService().dump().LIDO_LOCATOR_ADDRESS).toBe(LOCATOR);
+  });
+
+  it('masks a URL by its key part, so the host stays readable', () => {
+    const url = 'https://el.example/v2/AbCdEf0123456789XyZw';
+
+    const dump = makeService({ EL_RPC_URLS: [url] }).dump();
+
+    expect(dump.EL_RPC_URLS).toEqual(['https://el.example/v2/********************']);
   });
 });

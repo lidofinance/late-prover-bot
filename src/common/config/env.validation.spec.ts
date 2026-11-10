@@ -3,6 +3,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { ENV_KEYS, collectSecrets, validate } from './env.validation';
+import { logBootstrapError } from '../logger/bootstrap-logger';
+
+// The real logger still writes to stderr; the mock only records the calls
+jest.mock('../logger/bootstrap-logger', () => {
+  const actual = jest.requireActual('../logger/bootstrap-logger');
+  return { ...actual, logBootstrapError: jest.fn(actual.logBootstrapError) };
+});
 
 const KEY = '0x' + 'ab'.repeat(32);
 const EL_URL = 'https://el.example/v1/secret-token-el';
@@ -96,6 +103,31 @@ describe('validate', () => {
     expect(text).not.toContain(KEY.slice(2));
     expect(text).not.toContain('secret-token-el');
     expect(text).not.toContain('secret-token-cl');
+    // The validation error names the property and the constraint, never the value, so the text above would be
+    // clean even without a mask: the secrets handed to the logger are the proof
+    expect(logBootstrapError).toHaveBeenLastCalledWith(
+      'Configuration validation failed',
+      expect.stringContaining('HTTP_PORT'),
+      expect.arrayContaining([KEY, KEY.slice(2), EL_URL, CL_URL]),
+    );
+  });
+
+  it('trims the entries of the URL lists', () => {
+    const config = validate({ ...baseConfig(), EL_RPC_URLS: `${EL_URL}, https://b.example/y ` });
+
+    expect(config.EL_RPC_URLS).toEqual([EL_URL, 'https://b.example/y']);
+  });
+
+  it('rejects a locator that is not a 20 byte address and names only the variable', () => {
+    // A key pasted into the wrong variable is not in the secrets list, so only the validation keeps it off stderr
+    const misplacedKey = '0x' + 'cd'.repeat(32);
+
+    expect(() => validate({ ...baseConfig(), LIDO_LOCATOR_ADDRESS: misplacedKey })).toThrow('exit 1');
+
+    const text = stderrText();
+    expect(text).toContain('LIDO_LOCATOR_ADDRESS');
+    expect(text).toContain('matches');
+    expect(text).not.toContain(misplacedKey.slice(2));
   });
 
   it('rejects a key that is not 64 hex characters and names only the variable', () => {

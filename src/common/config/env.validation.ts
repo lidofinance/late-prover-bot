@@ -36,6 +36,10 @@ const HOUR = 60 * MINUTE;
 
 const hasValue = (value: unknown): boolean => value !== undefined && value !== null && value !== '';
 
+// A space after the comma would stay in the secret value: the mask would then look for " https://..." while the
+// clients request and log the URL without the space
+const splitList = (value: string): string[] => value.split(',').map((part) => part.trim());
+
 export class EnvironmentVariables {
   @IsEnum(Environment)
   NODE_ENV: Environment = Environment.Development;
@@ -50,6 +54,7 @@ export class EnvironmentVariables {
 
   @IsNotEmpty()
   @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
   public LIDO_LOCATOR_ADDRESS: string;
 
   // The format rule stops a malformed key here, where the error is masked. Later, ethers would quote the value in
@@ -133,7 +138,7 @@ export class EnvironmentVariables {
   @IsArray()
   @ArrayMinSize(1)
   @IsNotEmpty({ each: true })
-  @Transform(({ value }) => value.split(','))
+  @Transform(({ value }) => splitList(value))
   public EL_RPC_URLS!: string[];
 
   /** Path to a file with the value of EL_RPC_URLS; the file wins over the variable */
@@ -164,7 +169,7 @@ export class EnvironmentVariables {
   @IsArray()
   @ArrayMinSize(1)
   @IsNotEmpty({ each: true })
-  @Transform(({ value }) => value.split(','))
+  @Transform(({ value }) => splitList(value))
   public CL_API_URLS!: string[];
 
   /** Path to a file with the value of CL_API_URLS; the file wins over the variable */

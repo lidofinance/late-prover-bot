@@ -210,7 +210,7 @@ yarn run start:prod
 
 ### Startup log
 
-At startup the bot logs its build info (`Init app`: name, version, branch, commit) and every configuration variable (`Init app dumping envs`). In the dump and in the errors of the env validation the secrets are masked by value and by the common patterns of `@lidofinance/satanizer` (the common patterns also hide any other 40+ character hex string, such as the locator address); in the regular logs they are masked by value.
+At startup the bot logs its build info (`Init app`: name, version, branch, commit) and every configuration variable (`Init app dumping envs`). In the dump, in the errors of the env validation and in the regular logs the secrets are masked by value with the sanitizer of `@lido-nestjs/logger`: a key is replaced with `*` of the same length, and a URL is masked by its key parts, so the host stays readable (`https://rpc.example/v2/****`). A URL with no key-like part (16 characters or longer with a digit or a capital letter), for example an own node without a key, is masked whole.
 
 ## Gas Cost Estimation Tool
 
