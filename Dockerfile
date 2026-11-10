@@ -44,9 +44,6 @@ USER 1000:1000
 
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 CMD ["node", "docker/healthcheck.js"]
 
-# The default when NODE_OPTIONS is not set (the flags of start:prod). A deployment that sets the variable replaces
-# the whole value with its own heap limit, below the memory limit of its container; the runtime does not need the
-# vm modules flag
 ENV NODE_OPTIONS="--max-old-space-size=8192 --experimental-vm-modules"
 
 CMD ["node", "dist/main"]
