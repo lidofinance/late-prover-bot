@@ -9,13 +9,16 @@ const makeHeader = (root: string, slot: number) => ({
   header: { message: { slot: slot.toString(), proposer_index: '1' }, signature: '0xsig' },
 });
 
-const makeService = ({ roots = undefined as any, processImpl = jest.fn() } = {}) => {
+const makeService = ({ roots = undefined as any, processImpl = jest.fn(), execution = {} as any } = {}) => {
   const logger = makeLogger();
   const prometheus = {
     rootsProcessingDuration: { startTimer: jest.fn(() => jest.fn()) },
+    daemonCycleDuration: { startTimer: jest.fn(() => jest.fn()) },
     daemonSleepCount: { inc: jest.fn() },
     rootsSameCount: { inc: jest.fn() },
     latestSuccessRun: { setToCurrentTime: jest.fn() },
+    balanceEth: { set: jest.fn() },
+    memoryUsage: { set: jest.fn() },
   };
 
   const service = new (DaemonService as any)(
@@ -23,7 +26,7 @@ const makeService = ({ roots = undefined as any, processImpl = jest.fn() } = {})
     { get: jest.fn(() => 0) }, // config - zero sleep interval
     prometheus, // prometheus
     {}, // consensus
-    {}, // execution
+    execution, // execution
     { getRoots: jest.fn(async () => roots) }, // rootsProvider
     { process: processImpl }, // rootsProcessor
   );
@@ -91,5 +94,35 @@ describe('DaemonService.baseRun', () => {
 
     expect(logger.error).toHaveBeenCalledWith('Failed to process roots', expect.anything());
     expect(prometheus.daemonSleepCount.inc).not.toHaveBeenCalledWith({ reason: 'chain_not_ready' });
+  });
+});
+
+describe('DaemonService.runCycle', () => {
+  it('treats a failed balance read as a cycle error instead of an unhandled rejection', async () => {
+    const execution = {
+      balanceOf: jest.fn(async () => {
+        throw new Error('all providers failed');
+      }),
+    };
+    const { service, logger, prometheus, processImpl } = makeService({ roots: TRANSITION, execution });
+    (service as any).account = '0x0000000000000000000000000000000000000001';
+
+    await expect((service as any).runCycle()).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith('Error in daemon loop', expect.anything());
+    expect(prometheus.daemonSleepCount.inc).toHaveBeenCalledWith({ reason: 'error_recovery' });
+    expect(processImpl).not.toHaveBeenCalled();
+  });
+
+  it('records the balance and runs the cycle when the read succeeds', async () => {
+    const execution = { balanceOf: jest.fn(async () => BigInt('1500000000000000000')) };
+    const { service, prometheus, processImpl } = makeService({ roots: TRANSITION, execution });
+    (service as any).account = '0x0000000000000000000000000000000000000001';
+
+    await (service as any).runCycle();
+
+    expect(prometheus.balanceEth.set).toHaveBeenCalledWith(1.5);
+    expect(processImpl).toHaveBeenCalledTimes(1);
+    expect(prometheus.daemonSleepCount.inc).not.toHaveBeenCalledWith({ reason: 'error_recovery' });
   });
 });

@@ -106,14 +106,28 @@ export class DaemonService implements OnModuleInit {
     };
 
     this.prometheus.buildInfo.labels(buildInfoLabels).setToCurrentTime();
+
+    this.logger.log('Init app', { name, version, branch, commit, env });
+    this.logger.log('Init app dumping envs', this.config.dump());
   }
 
   public async run() {
     while (true) {
-      // Track daemon cycle
-      const stopCycleTimer = this.prometheus.daemonCycleDuration.startTimer({
-        cycle_type: 'main_loop',
-      });
+      await this.runCycle();
+    }
+  }
+
+  /**
+   * One daemon cycle: the balance read and the main run, with the same error handling. An EL failure on the
+   * balance read is a cycle error like any other, not an unhandled rejection that ends the process.
+   */
+  protected async runCycle() {
+    // Track daemon cycle
+    const stopCycleTimer = this.prometheus.daemonCycleDuration.startTimer({
+      cycle_type: 'main_loop',
+    });
+
+    try {
       if (this.account) {
         const botBalance = await this.execution.balanceOf(this.account);
         const balanceEth = ethers.utils.formatEther(botBalance);
@@ -121,26 +135,24 @@ export class DaemonService implements OnModuleInit {
         this.prometheus.balanceEth.set(parseFloat(balanceEth));
       }
 
-      try {
-        await this.baseRun();
-      } catch (error) {
-        this.logger.error('Error in daemon loop', serializeError(error));
+      await this.baseRun();
+    } catch (error) {
+      this.logger.error('Error in daemon loop', serializeError(error));
 
-        // Track daemon sleep due to error
-        this.prometheus.daemonSleepCount.inc({
-          reason: 'error_recovery',
-        });
+      // Track daemon sleep due to error
+      this.prometheus.daemonSleepCount.inc({
+        reason: 'error_recovery',
+      });
 
-        await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
-      } finally {
-        stopCycleTimer();
+      await sleep(this.config.get('DAEMON_SLEEP_INTERVAL_MS'));
+    } finally {
+      stopCycleTimer();
 
-        // Track memory usage
-        const memoryUsage = process.memoryUsage();
-        this.prometheus.memoryUsage.set({ memory_type: 'heap_used' }, memoryUsage.heapUsed);
-        this.prometheus.memoryUsage.set({ memory_type: 'heap_total' }, memoryUsage.heapTotal);
-        this.prometheus.memoryUsage.set({ memory_type: 'rss' }, memoryUsage.rss);
-      }
+      // Track memory usage
+      const memoryUsage = process.memoryUsage();
+      this.prometheus.memoryUsage.set({ memory_type: 'heap_used' }, memoryUsage.heapUsed);
+      this.prometheus.memoryUsage.set({ memory_type: 'heap_total' }, memoryUsage.heapTotal);
+      this.prometheus.memoryUsage.set({ memory_type: 'rss' }, memoryUsage.rss);
     }
   }
 
