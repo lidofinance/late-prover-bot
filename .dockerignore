@@ -45,10 +45,12 @@ yarn-error.log*
 # Runtime storage
 storage
 
-# Docker files (not needed inside image)
+# Docker files (not needed inside image), except the scripts the image runs
 Dockerfile
 docker-compose.yml
 docker
+!docker/healthcheck.js
+!docker/write-build-info.js
 .dockerignore
 
 # Misc

@@ -1,4 +1,7 @@
 import { ProverService } from './prover.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
+import { EARLIEST_ANCHORABLE_SLOT } from '../helpers/el-anchor';
+import { RequestError } from '../providers/base/rest-provider';
 
 // Minimal prometheus mock covering every counter/timer used in processValidator
 const makePrometheusMock = () => ({
@@ -12,6 +15,9 @@ const makePrometheusMock = () => ({
   validatorsPenaltyApplicableCount: { inc: jest.fn() },
   proofGenerationDuration: { startTimer: jest.fn(() => jest.fn()) },
   proofGenerationCount: { inc: jest.fn() },
+  validatorGroupProcessingDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateFetchDuration: { startTimer: jest.fn(() => jest.fn()) },
+  beaconStateDeserializationDuration: { startTimer: jest.fn(() => jest.fn()) },
 });
 
 const makeLogger = () => ({ log: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() });
@@ -31,7 +37,7 @@ const makeValidatorInput = (
 // Minimal stateView mock: returns a validator with a given exitEpoch
 const makeStateView = (exitEpoch: number | typeof Infinity) => ({
   validators: {
-    getReadonly: jest.fn(() => ({
+    get: jest.fn(() => ({
       exitEpoch,
       withdrawalCredentials: new Uint8Array(32),
       effectiveBalance: BigInt(32_000_000_000),
@@ -58,7 +64,7 @@ const makeService = (overrides: Record<string, any> = {}) => {
     {}, // exitRequests
     {}, // verifier
     {}, // stakingRouter
-    {}, // execution
+    overrides.execution ?? {}, // execution
     makePrometheusMock(), // prometheus
     {}, // config
     50, // validatorBatchSize
@@ -165,6 +171,70 @@ describe('ProverService.processValidator - exit epoch filtering', () => {
       expect.objectContaining({ reason: 'already_exited' }),
     );
   });
+
+  // The mock above has any method the code asks for. A Gloas state keeps its validators in a
+  // progressive list, whose tree view has `get` but no `getReadonly`: only a real view shows that.
+  it.each(['fulu', 'gloas'])('reads the validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: ACTIVATION_EPOCH,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService();
+    const result = await (service as any).processValidator(
+      makeValidatorInput({ validatorIndex: BigInt(1) }),
+      ACTIVATION_EPOCH,
+      DEADLINE_EPOCH,
+      type.deserializeToView(type.serialize(state)),
+      0, // too early: the method reads the validator, passes the exit checks and stops at eligibility
+      DELIVERED_TIMESTAMP,
+      0,
+      100,
+    );
+    expect(result).toBeNull();
+    expect(service.prometheus.validatorsSkippedCount.inc).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'not_eligible_yet' }),
+    );
+  });
+});
+
+// ─── groupValidatorsByDeadlineSlot — real state views ────────────────────────
+
+describe('ProverService.groupValidatorsByDeadlineSlot - real state views', () => {
+  // The first read of each exit request's validators. A Gloas state keeps them in a progressive list,
+  // whose tree view has `get` but no `getReadonly`.
+  it.each(['fulu', 'gloas'])('reads each validator from a real %s state view', async (fork) => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const type = ssz[fork].BeaconState;
+    const state = type.defaultValue();
+    const validator = {
+      ...ssz.phase0.Validator.defaultValue(),
+      activationEpoch: 10,
+      exitEpoch: Infinity,
+      withdrawableEpoch: Infinity,
+    };
+    state.validators = [validator, validator];
+    const service = makeService({ consensus: { slotToEpoch: jest.fn((slot: number) => Math.floor(slot / 32)) } });
+    service.getContractForModule = jest.fn(() => ({ exitDeadlineThreshold: jest.fn(async () => 3600) }));
+    const grouped = await service.groupValidatorsByDeadlineSlot(
+      [makeValidatorInput({ validatorIndex: BigInt(1) })],
+      1_700_000_000,
+      type.deserializeToView(type.serialize(state)),
+      {},
+      0,
+      100,
+    );
+    expect(
+      [...grouped.values()].map(({ validators }) =>
+        validators.map((entry: { activationEpoch: number }) => entry.activationEpoch),
+      ),
+    ).toEqual([[10]]);
+  });
 });
 
 // ─── decodeValidatorsData ─────────────────────────────────────────────────────
@@ -253,5 +323,341 @@ describe('ProverService.decodeValidatorsData', () => {
   it('returns empty array for empty data in any supported format', () => {
     expect(decode('0x', 1)).toEqual([]);
     expect(decode('0x', 2)).toEqual([]);
+  });
+});
+
+// ─── resolveProvableAnchor — EIP-4788 lookup key ──────────────────────────────
+
+// Hoodi (chain 560048) constants, taken from the network that produced the RootNotFound() incident
+const HOODI_GENESIS = 1742213400;
+const SECONDS_PER_SLOT = 12;
+
+// Real Hoodi history around the failing proof: slot 3624534 was never proposed, so the block root
+// of slot 3624533 was stored by the block at slot 3624535 under its own timestamp.
+const PROVABLE_SLOT = 3624533;
+const MISSED_SLOT = 3624534;
+const NEXT_PROPOSED_SLOT = 3624535;
+
+const rootOf = (slot: number) => `0xroot${slot}`;
+
+const makeHeader = (slot: number) => ({
+  root: rootOf(slot),
+  header: { message: { slot: slot.toString(), proposer_index: '1', parent_root: rootOf(slot - 1) } },
+});
+
+/** EIP-4788 HISTORY_BUFFER_LENGTH */
+const HISTORY_BUFFER_LENGTH = 8191;
+
+/**
+ * Chain stub. `missed` slots have no block; `unstored` slots produce no beacon roots entry - a
+ * missed execution block before Gloas, a withheld payload after it. With a `head`, entries written
+ * more than HISTORY_BUFFER_LENGTH slots before it are evicted. Everything else is answered by the
+ * predeploy the way the real one would.
+ */
+const makeAnchorService = ({
+  missed = [] as number[],
+  unstored = [] as number[],
+  head = undefined as number | undefined,
+} = {}) => {
+  const getBeaconHeader = jest.fn(async (blockId: string) => {
+    const slot = blockId === 'head' && head !== undefined ? head : Number(blockId);
+    if (missed.includes(slot)) {
+      throw new RequestError(`NOT_FOUND: beacon block at slot ${slot}`, 404);
+    }
+    return { root: rootOf(slot), header: { message: { slot: String(slot) } } };
+  });
+
+  const findNextAvailableHeader = jest.fn(async (startSlot: number) => {
+    let slot = startSlot;
+    while (missed.includes(slot)) slot++;
+    return { slot, header: await getBeaconHeader(slot.toString()) };
+  });
+
+  // The execution block of slot W stores the root of W's parent under ts(W)
+  const call = jest.fn(async ({ data }: { to: string; data: string }) => {
+    const timestamp = Number(BigInt(data));
+    const writerSlot = (timestamp - HOODI_GENESIS) / SECONDS_PER_SLOT;
+    if (head !== undefined && writerSlot <= head - HISTORY_BUFFER_LENGTH) throw new Error('execution reverted');
+    if (unstored.includes(writerSlot)) return '0x';
+    let parent = writerSlot - 1;
+    while (missed.includes(parent)) parent--;
+    return rootOf(parent);
+  });
+
+  const service = makeService({
+    consensus: {
+      genesisTimestamp: HOODI_GENESIS,
+      beaconConfig: { SLOTS_PER_EPOCH: 32, SECONDS_PER_SLOT, SLOTS_PER_HISTORICAL_ROOT: '8192' },
+      slotToTimestamp: (slot: number) => HOODI_GENESIS + slot * SECONDS_PER_SLOT,
+      getBeaconHeader,
+      findNextAvailableHeader,
+    },
+    execution: { provider: { call } },
+  });
+
+  return { service, call };
+};
+
+describe('ProverService.resolveProvableAnchor', () => {
+  it('skips a missed slot and keys on the next proposed slot (regression for RootNotFound)', async () => {
+    const { service } = makeAnchorService({ missed: [MISSED_SLOT] });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT);
+    // Timestamp of slot 3624535 - the block that actually stored the slot-3624533 root.
+    // Verified on Hoodi: BEACON_ROOTS.get(1785707820) == 0x37350b7f...3702a00c
+    expect(anchor.rootsTimestamp).toBe(1785707820);
+    // The old `genesis + (slot + 1) * SECONDS_PER_SLOT` formula produced this, and the beacon roots
+    // predeploy reverts on it because no execution block carries a missed slot's timestamp.
+    expect(anchor.rootsTimestamp).not.toBe(1785707808);
+  });
+
+  it('keys on slot + 1 when that slot was proposed', async () => {
+    const { service } = makeAnchorService();
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
+  });
+
+  it('skips a run of consecutive missed slots', async () => {
+    const { service } = makeAnchorService({
+      missed: [MISSED_SLOT, NEXT_PROPOSED_SLOT, NEXT_PROPOSED_SLOT + 1],
+    });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (NEXT_PROPOSED_SLOT + 2) * SECONDS_PER_SLOT);
+  });
+
+  it('confirms the root against the predeploy rather than assuming it is there', async () => {
+    const { service, call } = makeAnchorService();
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0].to).toBe('0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02');
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT);
+  });
+
+  // No execution block carried that slot's timestamp, so nothing stored the anchor's root and no
+  // later timestamp ever will - the anchor itself has to move.
+  it('moves the anchor forward when nothing stored its root', async () => {
+    const { service } = makeAnchorService({ unstored: [PROVABLE_SLOT + 1] });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT + 1);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 2) * SECONDS_PER_SLOT);
+  });
+
+  it('moves the anchor past a run of unstored roots and missed slots', async () => {
+    const { service } = makeAnchorService({
+      missed: [PROVABLE_SLOT + 2],
+      unstored: [PROVABLE_SLOT + 1, PROVABLE_SLOT + 3],
+    });
+
+    const anchor = await (service as any).resolveProvableAnchor(PROVABLE_SLOT);
+
+    expect(anchor.slot).toBe(PROVABLE_SLOT + 3);
+    expect(anchor.rootsTimestamp).toBe(HOODI_GENESIS + (PROVABLE_SLOT + 4) * SECONDS_PER_SLOT);
+  });
+
+  it('gives up when the predeploy holds none of the candidate roots', async () => {
+    const unstored = Array.from({ length: 32 }, (_, i) => PROVABLE_SLOT + 1 + i);
+    const { service } = makeAnchorService({ unstored });
+
+    await expect((service as any).resolveProvableAnchor(PROVABLE_SLOT)).rejects.toThrow(
+      'Failed to find a provable anchor',
+    );
+  });
+});
+
+// ─── processDeadlineSlot — choosing the proof path ────────────────────────────
+
+/** Runs processDeadlineSlot with the proof building and submission stubbed out */
+const runDeadlineSlot = async (deadlineSlot: number, head: number) => {
+  const { service, call } = makeAnchorService({ head });
+  service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async () => 0) };
+  jest.spyOn(service, 'processValidatorGroup').mockResolvedValue({
+    validatorWitnesses: [[{}]],
+    processedValidators: 1,
+    skippedValidators: 0,
+  });
+  const processHistoricalSlot = jest.spyOn(service, 'processHistoricalSlot').mockResolvedValue(undefined);
+  const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
+
+  await service.processDeadlineSlot(deadlineSlot, [{ validators: [], exitRequest: {} }], {}, {}, {}, 0, 0);
+
+  return { call, processHistoricalSlot, processCurrentSlot };
+};
+
+describe('ProverService.processDeadlineSlot', () => {
+  // A deadline older than the beacon roots buffer is proven through the historical summaries of the
+  // finalized anchor. Its own entry is long evicted, and the proof does not need it.
+  it('proves an old deadline through the historical path without its beacon roots entry', async () => {
+    const head = PROVABLE_SLOT + 2 * 7200;
+
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
+
+    expect(processCurrentSlot).not.toHaveBeenCalled();
+    expect(processHistoricalSlot).toHaveBeenCalledTimes(1);
+    expect(processHistoricalSlot.mock.calls[0][0]).toMatchObject({ slot: PROVABLE_SLOT });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('proves a recent deadline against its confirmed beacon roots entry', async () => {
+    const head = PROVABLE_SLOT + 100;
+
+    const { call, processHistoricalSlot, processCurrentSlot } = await runDeadlineSlot(PROVABLE_SLOT, head);
+
+    expect(processHistoricalSlot).not.toHaveBeenCalled();
+    expect(processCurrentSlot).toHaveBeenCalledTimes(1);
+    expect(processCurrentSlot.mock.calls[0][2]).toMatchObject({
+      header: { slot: PROVABLE_SLOT },
+      rootsTimestamp: HOODI_GENESIS + (PROVABLE_SLOT + 1) * SECONDS_PER_SLOT,
+    });
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  // The verifier checks each witness against the exit request of its call: the entry at its index
+  // in that request's data, and that request's delivery time. Two requests delivered in one slot
+  // share a deadline slot, so they share the proven block and its state, but not the call.
+  it('proves each exit request of a deadline slot in its own call', async () => {
+    const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
+    const { service } = makeAnchorService({ head: PROVABLE_SLOT + 100 });
+    const getState = jest.fn(async () => ({
+      forkName: 'gloas',
+      bodyBytes: ssz.gloas.BeaconState.serialize(ssz.gloas.BeaconState.defaultValue()),
+    }));
+    service.consensus.getState = getState;
+    const delivered: Record<string, number> = { '0xa': 1_000, '0xb': 2_000 };
+    service.exitRequests = { getExitRequestDeliveryTimestamp: jest.fn(async (hash: string) => delivered[hash]) };
+    jest
+      .spyOn(service, 'processValidator')
+      .mockImplementation(async (validator: any, _activation, _deadline, _view, _proofTime, deliveredAt) => ({
+        pubkey: validator.validatorPubkey,
+        deliveredAt,
+      }));
+    const processCurrentSlot = jest.spyOn(service, 'processCurrentSlot').mockResolvedValue(undefined);
+    const request = (hash: string, pubkey: string) => ({
+      exitRequest: { exitRequestsHash: hash, exitRequestsData: { data: `${hash}data`, dataFormat: 2 } },
+      validators: [
+        { validator: makeValidatorInput({ validatorPubkey: pubkey }), activationEpoch: 1, exitDeadlineEpoch: 2 },
+      ],
+    });
+    const first = request('0xa', '0xa1');
+    const second = request('0xb', '0xb1');
+
+    await service.processDeadlineSlot(PROVABLE_SLOT, [first, second], {}, {}, ssz, 0, 0);
+
+    expect(processCurrentSlot.mock.calls.map(([witnesses, exitRequest]) => [witnesses, exitRequest])).toEqual([
+      [[{ pubkey: '0xa1', deliveredAt: 1_000 }], first.exitRequest],
+      [[{ pubkey: '0xb1', deliveredAt: 2_000 }], second.exitRequest],
+    ]);
+    expect(getState).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── resolveLookbackFromBlock — START_LOOKBACK_DAYS window ────────────────────
+
+describe('ProverService.resolveLookbackFromBlock', () => {
+  const NOW_SLOT = 400_000;
+  const CURRENT_BLOCK = 300_000;
+
+  const makeLookbackService = ({ missed = [] as number[], anchors = {} as Record<number, number> } = {}) => {
+    const nextProposed = (slot: number) => {
+      let current = slot;
+      while (missed.includes(current)) current++;
+      return current;
+    };
+
+    return makeService({
+      consensus: {
+        timestampToSlot: (ts: number) => Math.floor((ts - HOODI_GENESIS) / SECONDS_PER_SLOT),
+        genesisTimestamp: HOODI_GENESIS,
+        findNextAvailableHeader: jest.fn(async (startSlot: number) => {
+          const slot = nextProposed(startSlot);
+          return { slot, header: makeHeader(slot) };
+        }),
+        getExecutionBlockHash: jest.fn(async (header: any) => `0xel${header.header.message.slot}`),
+      },
+      execution: {
+        provider: {
+          getBlock: jest.fn(async (hash: string) => {
+            const slot = Number(hash.replace('0xel', ''));
+            return anchors[slot] === undefined ? null : { number: anchors[slot] };
+          }),
+        },
+      },
+    });
+  };
+
+  beforeAll(() => {
+    // Freeze time so the lookback timestamp maps to a known slot
+    jest.useFakeTimers().setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
+  it('derives the first block of the window from the execution anchor of the lookback slot', async () => {
+    // 7 days back = 50400 slots
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({ anchors: { [lookbackSlot]: 111_222 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_222);
+    // Not the naive `currentBlock - days * 86400 / 12`, which assumes a block per slot
+    expect(fromBlock).not.toBe(CURRENT_BLOCK - 50_400);
+  });
+
+  it('scans forward when the lookback slot itself was never proposed', async () => {
+    const lookbackSlot = NOW_SLOT - 50_400;
+    const service = makeLookbackService({
+      missed: [lookbackSlot, lookbackSlot + 1],
+      anchors: { [lookbackSlot + 2]: 111_230 },
+    });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(111_230);
+  });
+
+  it('never starts the window past the current block', async () => {
+    const service = makeLookbackService({ anchors: { [NOW_SLOT]: CURRENT_BLOCK + 50 } });
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(0, CURRENT_BLOCK);
+
+    expect(fromBlock).toBe(CURRENT_BLOCK);
+  });
+
+  // On a chain younger than the window the computed slot is negative. Slot 0 is not a way out
+  // either: the genesis block anchors on a zero execution block hash the EL cannot resolve.
+  it('starts the window at the first anchorable slot on a chain younger than the window', async () => {
+    const service = makeLookbackService({ anchors: { [EARLIEST_ANCHORABLE_SLOT]: 1 } });
+    const consensus = (service as any).consensus;
+    jest.setSystemTime((HOODI_GENESIS + 25_000 * SECONDS_PER_SLOT) * 1000);
+
+    const fromBlock = await (service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK);
+
+    expect(consensus.findNextAvailableHeader).toHaveBeenCalledWith(EARLIEST_ANCHORABLE_SLOT);
+    expect(fromBlock).toBe(1);
+
+    jest.setSystemTime((HOODI_GENESIS + NOW_SLOT * SECONDS_PER_SLOT) * 1000);
+  });
+
+  // Typed so the daemon can hold its state and wait instead of treating it as a failure
+  it('reports an unknown anchor as the chain not being ready', async () => {
+    const service = makeLookbackService({ anchors: {} });
+
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(ChainNotReadyError);
+    await expect((service as any).resolveLookbackFromBlock(7, CURRENT_BLOCK)).rejects.toThrow(
+      'is unknown to the EL node',
+    );
   });
 });

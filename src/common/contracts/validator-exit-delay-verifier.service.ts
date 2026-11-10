@@ -7,6 +7,9 @@ import { ConfigService } from '../config/config.service';
 import contractJson from '../contracts/abi/validator-exit-delay-verifier.json';
 import { Execution } from '../providers/execution/execution';
 
+/** The fork switch of the verifier deployed before Gloas support, which has no GLOAS_SLOT */
+const LEGACY_FORK_SLOT_ABI = ['function PIVOT_SLOT() view returns (uint64)'];
+
 @Injectable()
 export class VerifierContract implements OnModuleInit {
   private contract: ethers.Contract;
@@ -34,7 +37,7 @@ export class VerifierContract implements OnModuleInit {
       const genesisTime = await this.contract.GENESIS_TIME();
       const secondsPerSlot = await this.contract.SECONDS_PER_SLOT();
       const slotsPerHistoricalRoot = await this.contract.SLOTS_PER_HISTORICAL_ROOT();
-      const pivotSlot = await this.contract.PIVOT_SLOT();
+      const forkSlot = await this.getForkSlot();
       const capellaSlot = await this.contract.CAPELLA_SLOT();
 
       this.logger.log(
@@ -44,12 +47,25 @@ export class VerifierContract implements OnModuleInit {
           `\n  GENESIS_TIME: ${genesisTime}` +
           `\n  SECONDS_PER_SLOT: ${secondsPerSlot}` +
           `\n  SLOTS_PER_HISTORICAL_ROOT: ${slotsPerHistoricalRoot}` +
-          `\n  PIVOT_SLOT: ${pivotSlot}` +
+          `\n  ${forkSlot}` +
           `\n  CAPELLA_SLOT: ${capellaSlot}`,
       );
     } catch (error) {
       this.logger.error('Failed to initialize VerifierContract:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * The slot the deployed verifier switches its state layout at. Only logged: both verifier versions
+   * take the same calls, so the bot has to start against either until the upgrade is enacted.
+   */
+  private async getForkSlot(): Promise<string> {
+    try {
+      return `GLOAS_SLOT: ${await this.contract.GLOAS_SLOT()}`;
+    } catch {
+      const legacy = new ethers.Contract(this.verifierAddress, LEGACY_FORK_SLOT_ABI, this.execution.provider);
+      return `PIVOT_SLOT: ${await legacy.PIVOT_SLOT()}`;
     }
   }
 

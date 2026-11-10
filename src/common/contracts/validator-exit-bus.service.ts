@@ -1,21 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 
 import { LidoLocatorContract } from './lido-locator.service';
 import { ExitRequestsData } from './types';
 import veboJson from '../contracts/abi/validator-exit-bus-oracle.json';
-import vebJson from '../contracts/abi/validator-exit-bus.json';
+import { extractExitRequestsData } from '../helpers/exit-requests-calldata';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
 import { Execution } from '../providers/execution/execution';
-
-interface ReportData {
-  consensusVersion: number;
-  refSlot: number;
-  requestsCount: number;
-  dataFormat: BigNumber;
-  data: string;
-}
 
 interface ExitRequestsResult {
   exitRequestsData: ExitRequestsData;
@@ -27,7 +19,6 @@ export class ExitRequestsContract implements OnModuleInit {
   private veboContract: ethers.Contract;
   private readonly logger = new Logger(ExitRequestsContract.name);
   private exitBusAddress: string;
-  private vebIface: ethers.utils.Interface;
 
   constructor(
     protected readonly execution: Execution,
@@ -43,7 +34,6 @@ export class ExitRequestsContract implements OnModuleInit {
 
       // Create interface from the ABI
       const veboIface = new ethers.utils.Interface(veboJson);
-      this.vebIface = new ethers.utils.Interface(vebJson);
 
       this.veboContract = new ethers.Contract(this.exitBusAddress, veboIface, this.execution.provider);
 
@@ -114,10 +104,15 @@ export class ExitRequestsContract implements OnModuleInit {
 
       let processedCount = 0;
       let errorCount = 0;
+      let decodeErrorCount = 0;
+
+      // Publish the series so an alert on them works before the first hit
+      for (const status of ['success', 'error', 'decode_error']) {
+        this.prometheus.exitRequestsProcessedCount.inc({ status }, 0);
+      }
 
       for (const event of events) {
         try {
-          processedCount++;
           // Process the transaction and get exit data
           const txHash = event.transactionHash;
 
@@ -152,79 +147,28 @@ export class ExitRequestsContract implements OnModuleInit {
             continue;
           }
 
-          // Decode the submitReportData or submitExitRequestsData transaction
-          let decodedData;
-          let decodeMethod = '';
-          try {
-            decodedData = this.veboContract.interface.decodeFunctionData('submitReportData', tx.data);
-            decodeMethod = 'submitReportData';
-          } catch (e1) {
-            try {
-              decodedData = this.vebIface.decodeFunctionData('submitExitRequestsData', tx.data);
-              decodeMethod = 'submitExitRequestsData';
-            } catch (e2) {
-              this.logger.error(`Failed to decode transaction data for ${txHash}:`, e1.message, e2.message);
-              continue;
-            }
+          const extracted = extractExitRequestsData(tx.data, exitRequestsHash);
+          if (!extracted) {
+            decodeErrorCount++;
+            this.logger.error(
+              `Failed to extract exit requests data for ${txHash}:` +
+                `\n  Exit requests hash: ${exitRequestsHash}` +
+                `\n  Transaction target: ${tx.to}` +
+                `\n  Calldata selector: ${ethers.utils.hexDataSlice(tx.data, 0, 4)}` +
+                `\n  Calldata size: ${ethers.utils.hexDataLength(tx.data)} bytes`,
+            );
+            continue;
           }
 
-          // For submitExitRequestsData, the structure is different
-          let reportData: ReportData;
-          if (decodeMethod === 'submitExitRequestsData') {
-            // Access the request struct from decodedData
-            const requestStruct = decodedData.request || decodedData[0];
-            if (!requestStruct || !requestStruct.data) {
-              this.logger.error(
-                `Request struct from ${decodeMethod} is invalid or missing 'data' property: ` +
-                  JSON.stringify(
-                    {
-                      txHash,
-                      decodeMethod,
-                      requestStruct,
-                      decodedDataKeys: Object.keys(decodedData),
-                    },
-                    null,
-                    2,
-                  ),
-              );
-              continue;
-            }
-            reportData = {
-              consensusVersion: 0, // Not available in submitExitRequestsData
-              refSlot: 0, // Not available in submitExitRequestsData
-              requestsCount: 0, // Not available in submitExitRequestsData
-              dataFormat: requestStruct.dataFormat,
-              data: requestStruct.data,
-            };
-          } else {
-            // For submitReportData, access data directly
-            if (!decodedData || typeof decodedData !== 'object' || !('data' in decodedData)) {
-              this.logger.error(
-                `Decoded data from ${decodeMethod} is invalid or missing 'data' property: ` +
-                  JSON.stringify(
-                    {
-                      txHash,
-                      decodeMethod,
-                      txData: tx.data,
-                      decodedData,
-                      decodedDataKeys: decodedData && typeof decodedData === 'object' ? Object.keys(decodedData) : null,
-                    },
-                    null,
-                    2,
-                  ),
-              );
-              continue;
-            }
-            reportData = decodedData.data as ReportData;
+          if (extracted.offset !== 0) {
+            this.logger.debug(
+              `Recovered ${extracted.method} payload nested at byte offset ${extracted.offset} in ${txHash}`,
+            );
           }
 
-          const exitRequestsData: ExitRequestsData = {
-            data: reportData.data,
-            dataFormat: reportData.dataFormat.toNumber(),
-          };
-
+          processedCount++;
           results.push({
-            exitRequestsData,
+            exitRequestsData: { data: extracted.data, dataFormat: extracted.dataFormat },
             exitRequestsHash,
           });
         } catch (error) {
@@ -241,6 +185,10 @@ export class ExitRequestsContract implements OnModuleInit {
         this.prometheus.exitRequestsProcessedCount.inc({ status: 'error' }, errorCount);
       }
 
+      if (decodeErrorCount > 0) {
+        this.prometheus.exitRequestsProcessedCount.inc({ status: 'decode_error' }, decodeErrorCount);
+      }
+
       const totalDuration = Date.now() - startTime;
       this.logger.debug(
         `Exit requests processing completed:` +
@@ -248,6 +196,7 @@ export class ExitRequestsContract implements OnModuleInit {
           `\n  Events found: ${events.length}` +
           `\n  Successfully processed: ${processedCount}` +
           `\n  Errors: ${errorCount}` +
+          `\n  Undecodable requests: ${decodeErrorCount}` +
           `\n  Total duration: ${totalDuration}ms` +
           `\n  Avg per event: ${events.length > 0 ? (totalDuration / events.length).toFixed(2) : 0}ms`,
       );

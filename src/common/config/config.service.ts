@@ -1,8 +1,21 @@
+import { secretsMask } from '@lido-nestjs/logger';
 import { ConfigService as ConfigServiceSource } from '@nestjs/config';
 
-import { EnvironmentVariables } from './env.validation';
+import { ENV_KEYS, EnvironmentVariables } from './env.validation';
 
 export class ConfigService extends ConfigServiceSource<EnvironmentVariables> {
+  /**
+   * Every variable of the config with the secrets masked, for the startup log
+   */
+  public dump(): Record<string, unknown> {
+    const mask = secretsMask({ secrets: this.secrets });
+    const values: Record<string, unknown> = {};
+    for (const key of ENV_KEYS) {
+      values[key] = this.get(key);
+    }
+    return mask(values);
+  }
+
   /**
    * List of sensitive values that should be hidden in logs
    */

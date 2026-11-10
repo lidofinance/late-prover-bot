@@ -1,6 +1,7 @@
-import { NonEmptyArray } from '@lido-nestjs/execution';
+import { AllProvidersFailedError, NonEmptyArray } from '@lido-nestjs/execution';
 
 import { PatchedFallbackProvider } from './patched-fallback-provider';
+import { EL_RPC_MAX_BACKOFF_MS } from '../../config/env.validation';
 
 const mockLogger = {
   log: jest.fn(),
@@ -148,5 +149,42 @@ describe('PatchedFallbackProvider fallback behavior (perform)', () => {
     });
     expect(fp0.provider.perform).toHaveBeenCalledTimes(1);
     expect(fp1.provider.perform).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Attempt count under the backoff cap ─────────────────────────────────────
+
+describe('PatchedFallbackProvider attempts under the backoff cap', () => {
+  // elRetryError in env.validation.ts models the library retrier (it stops when the next backoff would reach the
+  // cap); these runs pin the model to the real library, so a library upgrade that changes the rule fails here
+  const attemptsMade = async (minBackoffMs: number, maxRetries: number) => {
+    jest.useFakeTimers();
+    try {
+      const provider = new PatchedFallbackProvider(
+        { urls: ['http://localhost:1'], network, maxRetries, minBackoffMs, maxBackoffMs: EL_RPC_MAX_BACKOFF_MS },
+        mockLogger,
+      );
+      initNetworks(provider);
+      const [fp0] = (provider as any).fallbackProviders;
+      const perform = jest.spyOn(fp0.provider, 'perform').mockRejectedValue(new Error('network error'));
+
+      const outcome = provider.perform('eth_blockNumber', {}).catch((error) => error);
+      await jest.runAllTimersAsync();
+
+      expect(await outcome).toBeInstanceOf(AllProvidersFailedError);
+      return perform.mock.calls.length;
+    } finally {
+      jest.useRealTimers();
+    }
+  };
+
+  it('makes every attempt of a count the env validation accepts', async () => {
+    expect(await attemptsMade(500, 6)).toBe(6);
+    expect(await attemptsMade(5000, 2)).toBe(2);
+  });
+
+  it('stops before the last attempt of a count the env validation rejects', async () => {
+    expect(await attemptsMade(500, 7)).toBe(6);
+    expect(await attemptsMade(10_000, 2)).toBe(1);
   });
 });

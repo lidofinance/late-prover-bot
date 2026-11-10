@@ -126,6 +126,20 @@ NODE_OPTIONS=--max-old-space-size=8192 yarn run start:dev
 yarn run start:prod
 ```
 
+#### Docker image
+
+The `Dockerfile` builds a production image in three stages: the build stage compiles the sources, the second stage installs the production dependencies only, and the runtime stage holds `dist`, those dependencies, `package.json` and `build-info.json`. The runtime stage has no npm or yarn: the app starts with `node dist/main`, so the metric names (`late_prover_bot_*`) do not depend on yarn.
+
+The build arguments `BUILD_VERSION`, `BUILD_BRANCH` and `BUILD_COMMIT` regenerate `build-info.json`, which feeds the `build_info` metric and the startup log. They are set together: without them the file from the checkout is used, and a build with only some of them fails.
+
+```bash
+docker build \
+  --build-arg BUILD_VERSION=1.2.3 \
+  --build-arg BUILD_BRANCH=main \
+  --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  -t late-prover-bot .
+```
+
 ## Environment Variables
 
 | Name | Description | Required | Default |
@@ -138,17 +152,20 @@ yarn run start:prod
 | `CHAIN_ID` | Ethereum chain ID (1=mainnet, 5=goerli, 17000=holesky) | yes | |
 | **Blockchain Connection** | | | |
 | `EL_RPC_URLS` | Comma-separated execution layer RPC URLs | yes | |
-| `EL_RPC_RETRY_DELAY_MS` | Delay between EL RPC retries | no | `500` |
-| `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout | no | `60000` |
-| `EL_RPC_MAX_RETRIES` | Maximum EL RPC retries | no | `3` |
+| `EL_RPC_URLS_FILE` | Path to a file with the value of `EL_RPC_URLS`; the file wins over the variable | no | |
+| `EL_RPC_RETRY_DELAY_MS` | First backoff before an EL RPC retry (milliseconds); it doubles on every retry, and the retries stop once the next backoff would reach 10 s (a delay of 5000 or more allows at most 2 attempts, 10000 or more only 1) | no | `500` |
+| `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout (milliseconds) | no | `120000` |
+| `EL_RPC_MAX_RETRIES` | Attempts per EL RPC provider before the switch to the next one, the first try included (1 to 20; the 10 s backoff cap limits it further, to 6 with the default delay and 15 at most). A count the delay cannot reach is rejected at startup | no | `3` |
 | `CL_API_URLS` | Comma-separated consensus layer API URLs | yes | |
-| `CL_API_RETRY_DELAY_MS` | Delay between CL API retries | no | `500` |
+| `CL_API_URLS_FILE` | Path to a file with the value of `CL_API_URLS`; the file wins over the variable | no | |
+| `CL_API_RETRY_DELAY_MS` | First backoff before a CL API retry (milliseconds); it doubles on every retry up to 10 s | no | `500` |
 | `CL_API_RESPONSE_TIMEOUT_MS` | CL API response timeout | no | `60000` |
-| `CL_API_MAX_RETRIES` | Maximum CL API retries | no | `3` |
+| `CL_API_MAX_RETRIES` | Retries per CL API URL after the first attempt, before the switch to the next URL | no | `3` |
 | `FORK_NAME` | Ethereum consensus layer fork name (fallback if not in headers) | no | `electra` |
 | **Contracts** | | | |
 | `LIDO_LOCATOR_ADDRESS` | Lido Locator contract address | yes | |
-| `TX_SIGNER_PRIVATE_KEY` | Private key for transaction signing | yes (if not dry run) | |
+| `TX_SIGNER_PRIVATE_KEY` | Private key for transaction signing: 64 hex characters, with or without `0x` | yes (if not dry run) | |
+| `TX_SIGNER_PRIVATE_KEY_FILE` | Path to a file with the value of `TX_SIGNER_PRIVATE_KEY`; the file wins over the variable. An empty file means no key | no | |
 | **Transaction Settings** | | | |
 | `TX_MIN_GAS_PRIORITY_FEE` | Minimum gas priority fee (wei) | no | `50000000` (0.05 gwei) |
 | `TX_MAX_GAS_PRIORITY_FEE` | Maximum gas priority fee (wei) | no | `10000000000` (10 gwei) |
@@ -163,8 +180,37 @@ yarn run start:prod
 | **Startup Options** | | | |
 | `START_LOOKBACK_DAYS` | Number of days to look back when starting (if no last processed root in memory) | no | `7` |
 | **Logging** | | | |
-| `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | no | `info` |
+| `LOG_LEVEL` | Log level (`debug`, `info`, `notice`, `warning`, `error`) | no | `info` |
 | `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
+
+### Secrets from files
+
+`TX_SIGNER_PRIVATE_KEY`, `EL_RPC_URLS` and `CL_API_URLS` can be read from files instead of the env: set `<NAME>_FILE` to the path, one secret per file. This is how secrets mounted by a container platform (for example by a secrets agent sidecar) are picked up without a shell wrapper.
+
+Rules:
+
+- The file holds the plain value, exactly as it would be set in the env. Leading and trailing whitespace is ignored.
+- `<NAME>_FILE` takes priority over `<NAME>` when both are set.
+- The files are read once at startup, then the values are used until the process ends. To apply a new value, restart the bot.
+- A path that cannot be read, or a file that is not UTF-8 text, stops the bot at startup. The error names the variable and the path, never the content.
+- An empty file named by `TX_SIGNER_PRIVATE_KEY_FILE` means no key: the bot starts only with `DRY_RUN=true`, as without the variable.
+
+Local example:
+
+```bash
+mkdir -p secrets
+printf '%s' '0x<private key>' > secrets/tx-signer-private-key
+printf '%s' 'https://rpc-one/<key>,https://rpc-two/<key>' > secrets/el-rpc-urls
+chmod 600 secrets/*
+
+TX_SIGNER_PRIVATE_KEY_FILE=$PWD/secrets/tx-signer-private-key \
+EL_RPC_URLS_FILE=$PWD/secrets/el-rpc-urls \
+yarn run start:prod
+```
+
+### Startup log
+
+At startup the bot logs its build info (`Init app`: name, version, branch, commit) and every configuration variable (`Init app dumping envs`). In the dump, in the errors of the env validation and in the regular logs the secrets are masked by value with the sanitizer of `@lido-nestjs/logger`: a key is replaced with `*` of the same length, and a URL is masked by its key parts, so the host stays readable (`https://rpc.example/v2/****`). A URL with no key-like part (16 characters or longer with a digit or a capital letter), for example an own node without a key, is masked whole.
 
 ## Gas Cost Estimation Tool
 
@@ -214,6 +260,25 @@ curl http://localhost:8081/health
 ```
 
 ## Troubleshooting
+
+### Exit Requests Are Not Picked Up
+
+Symptom: a validator is well past its exit deadline, but the bot never generates a proof for it,
+and the logs show `Failed to extract exit requests data for <txHash>`.
+
+The bot reads the exit requests payload out of the calldata of the transaction that emitted
+`ExitDataProcessing`. That call is not necessarily the top-level one: oracle members may submit
+through a forwarding contract (for example `execute(address,bytes)`), which nests the real
+`submitReportData` calldata inside its own arguments. This is expected and handled — the payload
+is searched for anywhere in the calldata and accepted only when it hashes to the
+`exitRequestsHash` from the event (see `src/common/helpers/exit-requests-calldata.ts`).
+
+So this error means the payload could not be recovered at all: the submitting contract does not
+embed the exit bus calldata verbatim, or a new submission method was added to the exit bus. The
+error log includes the transaction target, the top-level selector and the calldata size — enough
+to identify the new shape. The affected requests are skipped entirely, so they must be
+re-ingested after the fix: restart with `START_LOOKBACK_DAYS` wide enough to cover the outage,
+since the validator storage is in-memory and only the lookback window is rescanned on startup.
 
 ### Gas-Related Errors
 
@@ -317,6 +382,15 @@ curl http://localhost:8081/metrics | grep late_prover_bot
 - **Memory Usage**: Heap usage and RSS memory
 - **Daemon Operations**: Cycle duration and sleep tracking
 - **Error Tracking**: Various error counters
+
+`exit_requests_processed_count{status}` splits exit request ingestion by outcome. Watch
+`status="decode_error"`: it means an `ExitDataProcessing` event was found but no exit requests
+payload matching its hash could be recovered from the transaction, so the request and all of its
+validators were skipped. It should always be zero — alert on any increase:
+
+```
+increase(exit_requests_processed_count{status="decode_error"}[1h]) > 0
+```
 
 ### Monitoring Stack
 

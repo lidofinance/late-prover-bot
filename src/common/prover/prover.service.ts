@@ -8,12 +8,36 @@ import { StakingRouterContract } from '../contracts/staking-router.service';
 import { ValidatorWitness } from '../contracts/types';
 import { ExitRequestsContract } from '../contracts/validator-exit-bus.service';
 import { VerifierContract } from '../contracts/validator-exit-delay-verifier.service';
+import { ChainNotReadyError } from '../errors/chain-not-ready.error';
+import { EARLIEST_ANCHORABLE_SLOT, resolveElBlockNumber } from '../helpers/el-anchor';
 import { generateHistoricalStateProof, generateValidatorProof, toHex } from '../helpers/proofs';
 import { getSizeRangeCategory } from '../prometheus/decorators';
 import { PrometheusService } from '../prometheus/prometheus.service';
-import { RequestError } from '../providers/base/rest-provider';
 import { Consensus } from '../providers/consensus/consensus';
+import { BlockHeaderResponse } from '../providers/consensus/response.interface';
 import { Execution } from '../providers/execution/execution';
+
+/**
+ * A beacon block a proof can be anchored on, and the timestamp the EIP-4788 ring buffer holds its
+ * root under.
+ */
+interface ProvableAnchor {
+  slot: number;
+  header: BlockHeaderResponse;
+  rootsTimestamp: number;
+}
+
+/** A proposed beacon block, with no claim about the beacon roots predeploy holding its root. */
+interface ProposedBlock {
+  slot: number;
+  header: BlockHeaderResponse;
+}
+
+/** EIP-4788 beacon roots predeploy */
+const BEACON_ROOTS_ADDRESS = '0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02';
+
+/** How many times {@link ProverService.resolveProvableAnchor} may move the anchor forward. */
+const MAX_ANCHOR_ADVANCES = 8;
 
 @Injectable()
 export class ProverService implements OnModuleInit {
@@ -72,18 +96,14 @@ export class ProverService implements OnModuleInit {
 
       // Calculate block range for configured lookback period
       const currentBlock = await this.execution.provider.getBlockNumber();
-      const SECONDS_PER_DAY = 24 * 60 * 60;
-      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS');
-      const AVERAGE_BLOCK_TIME = 12; // seconds per block on Ethereum
-
-      const blocksToLookBack = Math.floor((daysToLookBack * SECONDS_PER_DAY) / AVERAGE_BLOCK_TIME);
-      const fromBlock = Math.max(1, currentBlock - blocksToLookBack);
+      const daysToLookBack = this.config.get('START_LOOKBACK_DAYS') as number;
+      const fromBlock = await this.resolveLookbackFromBlock(daysToLookBack, currentBlock);
 
       this.loggerService.log(
         `Scanning for exit requests in recent blocks:` +
           `\n  Current block: ${currentBlock}` +
           `\n  From block: ${fromBlock}` +
-          `\n  Block range: ${blocksToLookBack} blocks (${daysToLookBack} days)`,
+          `\n  Block range: ${currentBlock - fromBlock} blocks (${daysToLookBack} days)`,
       );
 
       // Use the same batch processing but without eligible validator processing
@@ -94,10 +114,33 @@ export class ProverService implements OnModuleInit {
           `\n  Total deadline slots in storage: ${this.validatorsByDeadlineSlotStorage.size}`,
       );
     } catch (error) {
-      this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      // Startup must not depend on the chain being ready: the storage is a warm cache, and the
+      // daemon loop accumulates the same validators as it walks forward.
+      if (error instanceof ChainNotReadyError) {
+        this.loggerService.warn(
+          `Skipping storage initialization, the chain is not ready yet: ${error.message}` +
+            `\n  Storage stays empty and fills up as the daemon processes roots`,
+        );
+      } else {
+        this.loggerService.error('Failed to initialize storage with recent events:', error.message);
+      }
     } finally {
       this.updateValidatorStorageMetrics();
     }
+  }
+
+  /**
+   * The execution block the lookback window starts at, resolved through the CL (timestamp to slot
+   * to execution anchor). Counting `days * 86400 / 12` blocks back would start too early, since a
+   * slot can produce no execution block.
+   */
+  private async resolveLookbackFromBlock(daysToLookBack: number, currentBlock: number): Promise<number> {
+    const lookbackTimestamp = Math.floor(Date.now() / 1000) - daysToLookBack * 24 * 60 * 60;
+    const lookbackSlot = Math.max(EARLIEST_ANCHORABLE_SLOT, this.consensus.timestampToSlot(lookbackTimestamp));
+    const { header } = await this.consensus.findNextAvailableHeader(lookbackSlot);
+    const fromBlock = await resolveElBlockNumber(this.consensus, this.execution.provider, header);
+
+    return Math.min(Math.max(1, fromBlock), currentBlock);
   }
 
   /**
@@ -180,24 +223,30 @@ export class ProverService implements OnModuleInit {
     return Math.floor(secondsSinceGenesis / Number(this.consensus.beaconConfig.SECONDS_PER_SLOT));
   }
 
+  /**
+   * Build the witnesses of the validators of each exit request of a deadline slot, from one state of
+   * the slot. The witnesses come back per request, in the order of `requestGroups`.
+   */
   private async processValidatorGroup(
-    validatorGroup: {
-      validator: ReturnType<typeof this.decodeValidatorsData>[0];
-      activationEpoch: number;
-      exitDeadlineEpoch: number;
+    requestGroups: {
+      validators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[];
+      deliveredTimestamp: number;
     }[],
     deadlineSlot: number,
     proofSlotTimestamp: number,
-    deliveredTimestamp: number,
     fromBlock: number,
     toBlock: number,
   ): Promise<{
-    validatorWitnesses: ValidatorWitness[];
+    validatorWitnesses: ValidatorWitness[][];
     processedValidators: number;
     skippedValidators: number;
   }> {
     const groupStartTime = Date.now();
-    const groupSize = validatorGroup.length;
+    const groupSize = requestGroups.reduce((size, { validators }) => size + validators.length, 0);
     const groupSizeRange = getSizeRangeCategory(groupSize);
 
     // Track validator group processing
@@ -209,7 +258,8 @@ export class ProverService implements OnModuleInit {
     this.loggerService.log(
       `[Blocks ${fromBlock}-${toBlock}] Processing deadline slot group:` +
         `\n  Slot: ${deadlineSlot}` +
-        `\n  Validators in group: ${validatorGroup.length}`,
+        `\n  Exit requests in group: ${requestGroups.length}` +
+        `\n  Validators in group: ${groupSize}`,
     );
 
     // Track eligible validators
@@ -245,9 +295,9 @@ export class ProverService implements OnModuleInit {
           `\n  Error: ${error instanceof Error ? error.message : String(error)}`,
       );
       return {
-        validatorWitnesses: [],
+        validatorWitnesses: requestGroups.map(() => []),
         processedValidators: 0,
-        skippedValidators: validatorGroup.length,
+        skippedValidators: groupSize,
       };
     } finally {
       stopDeserialization();
@@ -262,39 +312,42 @@ export class ProverService implements OnModuleInit {
         `[Blocks ${fromBlock}-${toBlock}] Failed to deserialize deadline state view for slot ${deadlineSlot}`,
       );
       return {
-        validatorWitnesses: [],
+        validatorWitnesses: requestGroups.map(() => []),
         processedValidators: 0,
-        skippedValidators: validatorGroup.length,
+        skippedValidators: groupSize,
       };
     }
 
-    const validatorWitnesses: ValidatorWitness[] = [];
+    const validatorWitnesses: ValidatorWitness[][] = requestGroups.map(() => []);
     let processedValidators = 0;
     let skippedValidators = 0;
 
-    for (const { validator, activationEpoch, exitDeadlineEpoch } of validatorGroup) {
-      const witness = await this.processValidator(
-        validator,
-        activationEpoch,
-        exitDeadlineEpoch,
-        deadlineStateView,
-        proofSlotTimestamp,
-        deliveredTimestamp,
-        fromBlock,
-        toBlock,
-      );
+    for (let i = 0; i < requestGroups.length; i++) {
+      const { validators, deliveredTimestamp } = requestGroups[i];
+      for (const { validator, activationEpoch, exitDeadlineEpoch } of validators) {
+        const witness = await this.processValidator(
+          validator,
+          activationEpoch,
+          exitDeadlineEpoch,
+          deadlineStateView,
+          proofSlotTimestamp,
+          deliveredTimestamp,
+          fromBlock,
+          toBlock,
+        );
 
-      if (witness) {
-        validatorWitnesses.push(witness);
-        processedValidators++;
+        if (witness) {
+          validatorWitnesses[i].push(witness);
+          processedValidators++;
 
-        // Track processed validator
-        this.prometheus.validatorsProcessedCount.inc({
-          module_id: validator.moduleId.toString(),
-          processing_type: 'proof_generation',
-        });
-      } else {
-        skippedValidators++;
+          // Track processed validator
+          this.prometheus.validatorsProcessedCount.inc({
+            module_id: validator.moduleId.toString(),
+            processing_type: 'proof_generation',
+          });
+        } else {
+          skippedValidators++;
+        }
       }
     }
 
@@ -330,7 +383,9 @@ export class ProverService implements OnModuleInit {
       processing_type: 'eligibility_check',
     });
 
-    const deadlineStateValidator = stateView.validators.getReadonly(validatorIndex);
+    // A Gloas state keeps its validators in a progressive list. Its tree view has `get` but no
+    // `getReadonly`, so `get` is the read that works for every fork.
+    const deadlineStateValidator = stateView.validators.get(validatorIndex);
 
     // Check if validator already exited
     if (deadlineStateValidator.exitEpoch < exitDeadlineEpoch) {
@@ -583,20 +638,36 @@ export class ProverService implements OnModuleInit {
     provableFinalizedBlockHeader: any;
     ssz: any;
   } | null> {
-    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching finalized beacon state`);
-    const state = await this.consensus.getState('finalized');
     const finalizedBlockHeader = await this.consensus.getBeaconHeader('finalized');
-    const finalizedSlot = Number(finalizedBlockHeader.header.message.slot);
+
+    // Anchor on the finalized block's parent, so the block that stored its root - the writer - is the
+    // finalized block itself. Anchoring on the finalized block would make the writer its child, which
+    // is not finalized: a reorg there changes which execution block holds the timestamp and the
+    // submission reverts. Both blocks are finalized this way, and the anchor being one slot older
+    // costs nothing - its state is read for the historical summaries, which only grow.
+    const parentHeader = await this.consensus.getBeaconHeader(finalizedBlockHeader.header.message.parent_root);
+    const anchor = await this.resolveProvableAnchor(Number(parentHeader.header.message.slot));
+
+    if (anchor.slot !== Number(parentHeader.header.message.slot)) {
+      this.loggerService.warn(
+        `[Blocks ${fromBlock}-${toBlock}] Anchoring on slot ${anchor.slot} instead of slot ` +
+          `${parentHeader.header.message.slot}: the beacon roots contract holds no entry for it. ` +
+          `The anchor may not be finalized, a reorg would make its proofs revert.`,
+      );
+    }
+
+    this.loggerService.log(`[Blocks ${fromBlock}-${toBlock}] Fetching beacon state at slot ${anchor.slot}`);
+    const state = await this.consensus.getState(anchor.slot);
 
     const provableFinalizedBlockHeader = {
       header: {
-        slot: finalizedSlot,
-        proposerIndex: Number(finalizedBlockHeader.header.message.proposer_index),
-        parentRoot: finalizedBlockHeader.header.message.parent_root,
-        stateRoot: finalizedBlockHeader.header.message.state_root,
-        bodyRoot: finalizedBlockHeader.header.message.body_root,
+        slot: anchor.slot,
+        proposerIndex: Number(anchor.header.header.message.proposer_index),
+        parentRoot: anchor.header.header.message.parent_root,
+        stateRoot: anchor.header.header.message.state_root,
+        bodyRoot: anchor.header.header.message.body_root,
       },
-      rootsTimestamp: this.calcRootsTimestamp(finalizedSlot),
+      rootsTimestamp: anchor.rootsTimestamp,
     };
     const ssz = await eval(`import('@lodestar/types').then((m) => m.ssz)`);
 
@@ -722,7 +793,9 @@ export class ProverService implements OnModuleInit {
   }
 
   /**
-   * Process a single deadline slot with all its validators
+   * Process a single deadline slot with all its validators. The exit requests of the slot share the
+   * proven block and its state, but each one gets its own verifier calls: the verifier checks every
+   * witness of a call against the data and the delivery time of the call's exit request.
    */
   private async processDeadlineSlot(
     deadlineSlot: number,
@@ -733,66 +806,79 @@ export class ProverService implements OnModuleInit {
     fromBlock: number,
     toBlock: number,
   ): Promise<{ processedValidators: number; skippedValidators: number }> {
-    // Combine all validators for this deadline slot from all exit requests
-    let allValidators: {
-      validator: ReturnType<typeof this.decodeValidatorsData>[0];
-      activationEpoch: number;
-      exitDeadlineEpoch: number;
+    const requestGroups: {
+      exitRequest: any;
+      validators: {
+        validator: ReturnType<typeof this.decodeValidatorsData>[0];
+        activationEpoch: number;
+        exitDeadlineEpoch: number;
+      }[];
+      deliveredTimestamp: number;
     }[] = [];
-    let exitRequest: any = null;
 
     for (const groupData of groupDataArray) {
-      allValidators = allValidators.concat(groupData.validators);
-      if (!exitRequest) {
-        exitRequest = groupData.exitRequest; // Use the first exit request for the group
-      }
+      requestGroups.push({
+        exitRequest: groupData.exitRequest,
+        validators: groupData.validators,
+        deliveredTimestamp: await this.exitRequests.getExitRequestDeliveryTimestamp(
+          groupData.exitRequest.exitRequestsHash,
+        ),
+      });
     }
 
-    // Get delivery timestamp from the first exit request
-    const deliveredTimestamp = await this.exitRequests.getExitRequestDeliveryTimestamp(exitRequest.exitRequestsHash);
-
+    // An old block is proven through the historical summaries of the finalized anchor, so only a
+    // recent one needs its own entry in the beacon roots predeploy - an old one's is long evicted
     const isOldSlot = await this.isSlotOld(deadlineSlot);
+    const anchor = isOldSlot ? undefined : await this.resolveProvableAnchor(deadlineSlot);
+    const deadlineBlock: ProposedBlock = anchor ?? (await this.consensus.findNextAvailableHeader(deadlineSlot));
+    const actualSlot = deadlineBlock.slot;
 
-    const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-
-    // Use the actual slot that has a block for proof timestamp
+    // Use the slot the validator state is proven at for the proof timestamp
     const proofSlotTimestamp = this.consensus.slotToTimestamp(actualSlot);
-    const provableDeadlineBlockHeader = {
-      header: {
-        slot: Number(deadlineBlockHeader.header.message.slot),
-        proposerIndex: Number(deadlineBlockHeader.header.message.proposer_index),
-        parentRoot: deadlineBlockHeader.header.message.parent_root,
-        stateRoot: deadlineBlockHeader.header.message.state_root,
-        bodyRoot: deadlineBlockHeader.header.message.body_root,
-      },
-      rootsTimestamp: this.calcRootsTimestamp(actualSlot),
-    };
 
-    // Process all combined validators for this deadline slot
+    // Build the witnesses of every exit request of this deadline slot from one state
     const { validatorWitnesses, processedValidators, skippedValidators } = await this.processValidatorGroup(
-      allValidators,
+      requestGroups,
       actualSlot,
       proofSlotTimestamp,
-      deliveredTimestamp,
       fromBlock,
       toBlock,
     );
 
-    if (validatorWitnesses.length === 0) {
+    if (validatorWitnesses.every((witnesses) => witnesses.length === 0)) {
       return { processedValidators: 0, skippedValidators: 0 };
     }
 
-    if (isOldSlot) {
-      await this.processHistoricalSlot(
-        deadlineSlot,
-        validatorWitnesses,
-        exitRequest,
-        finalizedStateView,
-        provableFinalizedBlockHeader,
-        ssz,
-      );
-    } else {
-      await this.processCurrentSlot(validatorWitnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
+    const provableDeadlineBlockHeader = anchor && {
+      header: {
+        slot: actualSlot,
+        proposerIndex: Number(anchor.header.header.message.proposer_index),
+        parentRoot: anchor.header.header.message.parent_root,
+        stateRoot: anchor.header.header.message.state_root,
+        bodyRoot: anchor.header.header.message.body_root,
+      },
+      rootsTimestamp: anchor.rootsTimestamp,
+    };
+
+    for (let i = 0; i < requestGroups.length; i++) {
+      const { exitRequest } = requestGroups[i];
+      const witnesses = validatorWitnesses[i];
+      if (witnesses.length === 0) {
+        continue;
+      }
+
+      if (provableDeadlineBlockHeader) {
+        await this.processCurrentSlot(witnesses, exitRequest, provableDeadlineBlockHeader, fromBlock, toBlock);
+      } else {
+        await this.processHistoricalSlot(
+          deadlineBlock,
+          witnesses,
+          exitRequest,
+          finalizedStateView,
+          provableFinalizedBlockHeader,
+          ssz,
+        );
+      }
     }
 
     return { processedValidators, skippedValidators };
@@ -802,7 +888,7 @@ export class ProverService implements OnModuleInit {
    * Process historical slot verification
    */
   private async processHistoricalSlot(
-    deadlineSlot: number,
+    deadlineBlock: ProposedBlock,
     validatorWitnesses: any[],
     exitRequest: any,
     finalizedStateView: any,
@@ -811,9 +897,12 @@ export class ProverService implements OnModuleInit {
   ): Promise<void> {
     // Split into batches to avoid oversized transactions
     const batches = this.createValidatorBatches(validatorWitnesses);
+    // The block the witnesses were built from - the same one the summary proof has to point at
+    const actualSlot = deadlineBlock.slot;
+    const deadlineBlockHeader = deadlineBlock.header;
 
     this.loggerService.log(
-      `Processing historical slot ${deadlineSlot} in ${batches.length} batches:` +
+      `Processing historical slot ${actualSlot} in ${batches.length} batches:` +
         `\n  Total validators: ${validatorWitnesses.length}` +
         `\n  Batch size: ${this.validatorBatchSize}` +
         `\n  Batches: ${batches.map((batch, i) => `${i + 1}(${batch.length})`).join(', ')}`,
@@ -823,12 +912,9 @@ export class ProverService implements OnModuleInit {
       const batch = batches[i];
       const batchStartTime = Date.now();
 
-      const { slot: actualSlot, header: deadlineBlockHeader } = await this.findNextAvailableSlot(deadlineSlot);
-
       this.loggerService.log(
         `Processing historical batch ${i + 1}/${batches.length}:` +
-          `\n  Requested deadline slot: ${deadlineSlot}` +
-          `\n  Actual available slot: ${actualSlot}` +
+          `\n  Anchor slot: ${actualSlot}` +
           `\n  Validators in batch: ${batch.length}`,
       );
 
@@ -906,7 +992,7 @@ export class ProverService implements OnModuleInit {
 
         this.loggerService.log(
           `✅ Historical batch ${i + 1}/${batches.length} completed:` +
-            `\n  Slot: ${deadlineSlot}` +
+            `\n  Slot: ${actualSlot}` +
             `\n  Validators: ${batch.length}` +
             `\n  Reported validators tracked: ${this.reportedValidatorPubkeys.size}` +
             `\n  Processing time: ${Date.now() - batchStartTime}ms`,
@@ -916,7 +1002,7 @@ export class ProverService implements OnModuleInit {
         // Just log a brief reference for this batch context
         this.loggerService.error(
           `❌ Historical batch ${i + 1}/${batches.length} failed:` +
-            `\n  Slot: ${deadlineSlot}` +
+            `\n  Slot: ${actualSlot}` +
             `\n  Validators: ${batch.length}` +
             `\n  Error: ${this.getErrorReference(error)}`,
         );
@@ -1251,7 +1337,8 @@ export class ProverService implements OnModuleInit {
 
     for (const validator of validators) {
       const validatorIndex = Number(validator.validatorIndex);
-      const stateValidator = stateView.validators.getReadonly(validatorIndex);
+      // `get`, not `getReadonly`: a Gloas state's progressive list of validators has no `getReadonly`.
+      const stateValidator = stateView.validators.get(validatorIndex);
       const activationEpoch = stateValidator.activationEpoch;
       const eligibleExitRequestTimestamp = this.getEligibleExitRequestTimestamp(deliveredTimestamp, activationEpoch);
       const withdrawableEpoch = stateValidator.withdrawableEpoch;
@@ -1376,54 +1463,78 @@ export class ProverService implements OnModuleInit {
     return slot % slotsPerHistoricalRoot;
   }
 
-  private calcRootsTimestamp(slot: number): number {
-    return (
-      this.consensus.genesisTimestamp +
-      Number(this.consensus.beaconConfig.SECONDS_PER_SLOT) +
-      slot * Number(this.consensus.beaconConfig.SECONDS_PER_SLOT)
+  /**
+   * The block a proof for `startSlot` is anchored on, and the timestamp under which the EIP-4788
+   * beacon roots predeploy holds that block's root - confirmed against the predeploy itself.
+   *
+   * The root of a block is never stored by that block. It is stored by the execution block of the
+   * *next proposed* beacon block, as its `parent_beacon_block_root`, keyed by that execution block's
+   * own timestamp. So the timestamp to pass the verifier belongs to the next block, not to the block
+   * being proven.
+   *
+   * Several things leave the ring buffer without a usable entry, and every one of them ends in the
+   * verifier reverting with RootNotFound():
+   *
+   * - the next slot was missed, so no execution block carries its timestamp. The next *proposed*
+   *   block is the one that stored the root;
+   * - the entry has been evicted. The buffer holds HISTORY_BUFFER_LENGTH slots (~27 h), and
+   *   `isSlotOld` switches to the historical-summaries path one slot later, so a recent deadline can
+   *   fall into the gap between the two. Older deadlines never get here: they are proven through
+   *   the historical summaries and do not need an entry of their own;
+   * - the execution block never existed even though the beacon block did. That cannot happen before
+   *   Gloas, and from Gloas on it is what a withheld payload looks like.
+   *
+   * Rather than infer which of these happened, ask the predeploy. When it does not hold the root, the
+   * only way forward is to anchor on the next block instead and ask again - that block's root is
+   * written by a different, later execution block.
+   *
+   * Moving the anchor forward is safe for an exit-delay proof: it proves the validator had still not
+   * exited at a later slot, which only increases the delay the verifier computes, and the validator
+   * state is read at that same later slot.
+   */
+  private async resolveProvableAnchor(startSlot: number): Promise<ProvableAnchor> {
+    let anchor = await this.consensus.findNextAvailableHeader(startSlot);
+
+    for (let attempt = 0; attempt < MAX_ANCHOR_ADVANCES; attempt++) {
+      const writer = await this.consensus.findNextAvailableHeader(anchor.slot + 1);
+      const rootsTimestamp = this.consensus.slotToTimestamp(writer.slot);
+      const storedRoot = await this.getBeaconBlockRoot(rootsTimestamp);
+
+      if (storedRoot === anchor.header.root) {
+        return { slot: anchor.slot, header: anchor.header, rootsTimestamp };
+      }
+
+      this.loggerService.log(
+        `Beacon roots contract holds ${storedRoot ?? 'nothing'} at ${rootsTimestamp}, not the root of slot ` +
+          `${anchor.slot}:` +
+          `\n  Moving the proof anchor from slot ${anchor.slot} to slot ${writer.slot}`,
+      );
+      anchor = writer;
+    }
+
+    throw new Error(
+      `Failed to find a provable anchor within ${MAX_ANCHOR_ADVANCES} blocks after slot ${startSlot}: ` +
+        `the beacon roots contract held none of their roots`,
     );
   }
 
   /**
-   * Find the next available (non-skipped) slot at or after the given slot
-   * Beacon chain can have skipped slots where no block was proposed
+   * The block root the EIP-4788 predeploy holds for a timestamp, or null when it holds none.
    *
-   * @param startSlot The slot to start searching from
-   * @param maxAttempts Maximum number of slots to try (default: 32, one epoch)
-   * @returns The next available slot number and its header
+   * This is the same call the verifier makes, so its answer is exactly what the submission will see.
    */
-  private async findNextAvailableSlot(
-    startSlot: number,
-    maxAttempts: number = 32,
-  ): Promise<{ slot: number; header: any }> {
-    let currentSlot = startSlot;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const header = await this.consensus.getBeaconHeader(currentSlot.toString());
-        // Successfully got header - this slot has a block
-        this.loggerService.log(
-          `Found available slot ${currentSlot}` +
-            (currentSlot !== startSlot ? ` (requested: ${startSlot}, skipped: ${currentSlot - startSlot})` : ''),
-        );
-        return { slot: currentSlot, header };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Only retry for 404 errors (skipped slots), throw all other errors
-        if (!(error instanceof RequestError && error.statusCode === 404)) {
-          throw error;
-        }
-
-        this.loggerService.debug?.(`Slot ${currentSlot} is skipped (404), trying next slot`);
-        currentSlot++;
-      }
+  private async getBeaconBlockRoot(timestamp: number): Promise<string | null> {
+    try {
+      const root = await this.execution.provider.call({
+        to: BEACON_ROOTS_ADDRESS,
+        data: ethers.utils.hexZeroPad(ethers.BigNumber.from(timestamp).toHexString(), 32),
+      });
+      // The predeploy returns empty data for a timestamp it has no entry for
+      return root && root !== '0x' ? root : null;
+    } catch {
+      // Reverts for a timestamp outside the ring buffer
+      return null;
     }
-
-    throw new Error(
-      `Failed to find available slot after ${maxAttempts} attempts starting from slot ${startSlot}. Last error: ${lastError?.message}`,
-    );
   }
 
   /**

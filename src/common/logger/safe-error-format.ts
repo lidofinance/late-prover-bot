@@ -1,9 +1,8 @@
 /**
- * Safely serializes an error for logging to avoid stack overflow during secret sanitization
+ * Serializes an error for logging as a short JSON string
  *
- * The @lido-nestjs/logger with secrets sanitization recursively processes all properties
- * of logged objects. When error objects contain large payloads, deep nesting, or circular
- * references, this causes stack overflow.
+ * The @lido-nestjs/logger masks every property of a logged object and cuts large or deep payloads by the limits
+ * of its sanitizer, so an error that carries a big payload (an RPC response, a request) would be logged truncated.
  *
  * This utility extracts only safe, essential error information (message and stack trace)
  * and serializes it as JSON string.

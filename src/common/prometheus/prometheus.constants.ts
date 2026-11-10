@@ -1,8 +1,13 @@
-export const APP_NAME = process.env.npm_package_name;
-export const APP_DESCRIPTION = process.env.npm_package_description;
+import * as buildInfo from 'build-info';
+
+// A constant, not npm_package_name: the image starts the app with node, where the yarn variables do not exist.
+// The metric names (late_prover_bot_*) must stay the same as the alert rules expect.
+export const APP_NAME = 'late-prover-bot';
+export const APP_VERSION: string = buildInfo.version;
+export const USER_AGENT = `${APP_NAME}/${APP_VERSION}`;
 
 export const METRICS_URL = '/metrics';
-export const METRICS_PREFIX = `${APP_NAME?.replace(/[- ]/g, '_')}_`;
+export const METRICS_PREFIX = `${APP_NAME.replace(/[- ]/g, '_')}_`;
 
 export const METRIC_BUILD_INFO = `build_info`;
 
