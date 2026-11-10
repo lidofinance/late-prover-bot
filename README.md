@@ -128,7 +128,7 @@ yarn run start:prod
 
 #### Docker image
 
-The `Dockerfile` builds a production image in three stages: the build stage compiles the sources, the second stage installs the production dependencies only, and the runtime stage holds `dist`, those dependencies, `package.json` and `build-info.json`. The runtime stage has no npm or yarn: the app starts with `node dist/main` and the flags of `start:prod`, so the metric names (`late_prover_bot_*`) do not depend on yarn.
+The `Dockerfile` builds a production image in three stages: the build stage compiles the sources, the second stage installs the production dependencies only, and the runtime stage holds `dist`, those dependencies, `package.json` and `build-info.json`. The runtime stage has no npm or yarn: the app starts with `node dist/main`, so the metric names (`late_prover_bot_*`) do not depend on yarn. The image sets `NODE_OPTIONS` to the flags of `start:prod` as the default. A deployment that sets the variable replaces the whole value: a heap limit below the memory limit of its container is enough, the runtime does not need `--experimental-vm-modules`.
 
 The build arguments `BUILD_VERSION`, `BUILD_BRANCH` and `BUILD_COMMIT` regenerate `build-info.json`, which feeds the `build_info` metric and the startup log. They are set together: without them the file from the checkout is used, and a build with only some of them fails.
 
