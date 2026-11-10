@@ -10,7 +10,7 @@ import { ConditionalModule } from '@nestjs/config';
 import type { ConnectionInfo } from 'ethers/lib/utils';
 
 import { ConfigService } from '../config/config.service';
-import { WorkingMode } from '../config/env.validation';
+import { EL_RPC_MAX_BACKOFF_MS, WorkingMode } from '../config/env.validation';
 import { PrometheusService, RequestStatus, USER_AGENT } from '../prometheus';
 import { Consensus } from './consensus/consensus';
 import { Execution } from './execution/execution';
@@ -35,11 +35,11 @@ export const buildProviderOptions = async (
     ) as NonEmptyArray<ConnectionInfo>,
     network: configService.get('CHAIN_ID'),
     // Attempts per provider before the switch to the next one (the first try included). The backoff starts at the
-    // delay and doubles on every retry; the cap is set so that the attempt count, not the cap, ends the retries
-    // (the library stops retrying as soon as the backoff reaches the cap).
+    // delay and doubles on every retry; the library stops retrying as soon as the backoff reaches the cap, and the
+    // env validation rejects a count the cap cannot reach (elRetryError).
     maxRetries,
     minBackoffMs: retryDelayMs,
-    maxBackoffMs: retryDelayMs * 2 ** maxRetries,
+    maxBackoffMs: EL_RPC_MAX_BACKOFF_MS,
     fetchMiddlewares: [
       async (next: any, ctx: any) => {
         const targetName = new URL(ctx.provider.connection.url).hostname;

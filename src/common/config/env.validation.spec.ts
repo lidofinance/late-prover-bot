@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { ENV_KEYS, collectSecrets, validate } from './env.validation';
+import { ENV_KEYS, collectSecrets, elRetryError, validate } from './env.validation';
 import { logBootstrapError } from '../logger/bootstrap-logger';
 
 // The real logger still writes to stderr; the mock only records the calls
@@ -112,6 +112,22 @@ describe('validate', () => {
     );
   });
 
+  it('rejects an EL attempt count the backoff cap cannot reach and names the maximum', () => {
+    expect(() => validate({ ...baseConfig(), EL_RPC_MAX_RETRIES: '20' })).toThrow('exit 1');
+
+    const text = stderrText();
+    expect(text).toContain('EL_RPC_MAX_RETRIES=20 is not reachable with EL_RPC_RETRY_DELAY_MS=500');
+    expect(text).toContain('the maximum is 6');
+    expect(text).not.toContain(KEY);
+  });
+
+  it('accepts the highest reachable EL attempt count', () => {
+    expect(validate({ ...baseConfig(), EL_RPC_MAX_RETRIES: '6' }).EL_RPC_MAX_RETRIES).toBe(6);
+    expect(
+      validate({ ...baseConfig(), EL_RPC_RETRY_DELAY_MS: '5000', EL_RPC_MAX_RETRIES: '2' }).EL_RPC_MAX_RETRIES,
+    ).toBe(2);
+  });
+
   it('trims the entries of the URL lists', () => {
     const config = validate({ ...baseConfig(), EL_RPC_URLS: `${EL_URL}, https://b.example/y ` });
 
@@ -195,5 +211,23 @@ describe('collectSecrets', () => {
     });
 
     expect(secrets).toEqual(['0xabc', 'abc', 'https://a/x', 'https://b/y']);
+  });
+});
+
+describe('elRetryError', () => {
+  const check = (EL_RPC_RETRY_DELAY_MS: number, EL_RPC_MAX_RETRIES: number) =>
+    elRetryError({ EL_RPC_RETRY_DELAY_MS, EL_RPC_MAX_RETRIES });
+
+  it('allows one attempt with any delay', () => {
+    expect(check(60_000, 1)).toBeUndefined();
+  });
+
+  it('allows the sleeps 500, 1000, 2000, 4000, 8000 and rejects the sixth sleep of 16000', () => {
+    expect(check(500, 6)).toBeUndefined();
+    expect(check(500, 7)).toContain('the maximum is 6');
+  });
+
+  it('rejects a first delay at the cap when a retry is requested', () => {
+    expect(check(10_000, 2)).toContain('the maximum is 1');
   });
 });

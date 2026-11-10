@@ -1,4 +1,5 @@
 import { buildProviderOptions } from './providers.module';
+import { EL_RPC_MAX_BACKOFF_MS } from '../config/env.validation';
 import { USER_AGENT } from '../prometheus';
 
 const makeConfig = (values: Record<string, unknown>) => ({ get: jest.fn((key: string) => values[key]) });
@@ -22,13 +23,12 @@ describe('buildProviderOptions', () => {
     expect(options.network).toBe(1);
   });
 
-  it('maps the retry variables so that the attempt count ends the retries', async () => {
+  it('maps the retry variables and caps the backoff', async () => {
     const options = await buildProviderOptions(config as any, {} as any);
 
     expect(options.maxRetries).toBe(4);
     expect(options.minBackoffMs).toBe(250);
-    // the backoff doubles on every retry: 250, 500, 1000 for 4 attempts; the cap stays above the last one
-    expect(options.maxBackoffMs).toBe(250 * 2 ** 4);
+    expect(options.maxBackoffMs).toBe(EL_RPC_MAX_BACKOFF_MS);
     expect(options.fetchMiddlewares).toHaveLength(1);
   });
 });

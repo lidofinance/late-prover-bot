@@ -34,6 +34,9 @@ export enum WorkingMode {
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 
+/** The EL fallback provider stops retrying when the next backoff would reach this value; every sleep stays below it */
+export const EL_RPC_MAX_BACKOFF_MS = 10_000;
+
 const hasValue = (value: unknown): boolean => value !== undefined && value !== null && value !== '';
 
 // A space after the comma would stay in the secret value: the mask would then look for " https://..." while the
@@ -159,7 +162,7 @@ export class EnvironmentVariables {
   @Transform(({ value }) => parseInt(value, 10), { toClassOnly: true })
   public EL_RPC_RESPONSE_TIMEOUT_MS = 2 * MINUTE;
 
-  /** Attempts per EL provider before the switch to the next one (the first try included) */
+  /** Attempts per EL provider before the switch to the next one (the first try included); see elRetryError */
   @IsInt()
   @Min(1)
   @Max(20)
@@ -269,7 +272,38 @@ export function validate(config: Record<string, unknown>) {
     return fail(errors.toString(), collectSecrets(resolvedConfig));
   }
 
+  const retryError = elRetryError(validatedConfig);
+  if (retryError) {
+    return fail(retryError, collectSecrets(resolvedConfig));
+  }
+
   return validatedConfig;
+}
+
+/**
+ * The EL fallback provider doubles the backoff after every failed attempt and gives up as soon as the backoff
+ * reaches EL_RPC_MAX_BACKOFF_MS, so a high attempt count with a long first delay would never be reached. The cap keeps
+ * a dead provider from blocking the bot for hours before the next provider is tried; this check keeps the configured
+ * count honest.
+ */
+export function elRetryError(
+  config: Pick<EnvironmentVariables, 'EL_RPC_MAX_RETRIES' | 'EL_RPC_RETRY_DELAY_MS'>,
+): string | undefined {
+  const { EL_RPC_MAX_RETRIES: attempts, EL_RPC_RETRY_DELAY_MS: delayMs } = config;
+  // attempt k (from 1) is followed by a sleep of delayMs * 2 ** (k - 1), which must stay below the cap for every
+  // sleep before the last attempt
+  const reachable = (count: number) => count < 2 || delayMs * 2 ** (count - 2) < EL_RPC_MAX_BACKOFF_MS;
+  if (reachable(attempts)) {
+    return undefined;
+  }
+  let max = 1;
+  while (reachable(max + 1)) {
+    max++;
+  }
+  return (
+    `EL_RPC_MAX_RETRIES=${attempts} is not reachable with EL_RPC_RETRY_DELAY_MS=${delayMs}: the retries stop when the ` +
+    `next backoff would reach ${EL_RPC_MAX_BACKOFF_MS} ms, the maximum is ${max}`
+  );
 }
 
 /**

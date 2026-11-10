@@ -153,9 +153,9 @@ docker build \
 | **Blockchain Connection** | | | |
 | `EL_RPC_URLS` | Comma-separated execution layer RPC URLs | yes | |
 | `EL_RPC_URLS_FILE` | Path to a file with the value of `EL_RPC_URLS`; the file wins over the variable | no | |
-| `EL_RPC_RETRY_DELAY_MS` | First backoff before an EL RPC retry (milliseconds); it doubles on every retry | no | `500` |
+| `EL_RPC_RETRY_DELAY_MS` | First backoff before an EL RPC retry (milliseconds); it doubles on every retry, and the retries stop once the next backoff would reach 10 s (a delay of 5000 or more allows at most 2 attempts, 10000 or more only 1) | no | `500` |
 | `EL_RPC_RESPONSE_TIMEOUT_MS` | EL RPC response timeout (milliseconds) | no | `120000` |
-| `EL_RPC_MAX_RETRIES` | Attempts per EL RPC provider before the switch to the next one, the first try included (1 to 20) | no | `3` |
+| `EL_RPC_MAX_RETRIES` | Attempts per EL RPC provider before the switch to the next one, the first try included (1 to 20; the 10 s backoff cap limits it further, to 6 with the default delay and 15 at most). A count the delay cannot reach is rejected at startup | no | `3` |
 | `CL_API_URLS` | Comma-separated consensus layer API URLs | yes | |
 | `CL_API_URLS_FILE` | Path to a file with the value of `CL_API_URLS`; the file wins over the variable | no | |
 | `CL_API_RETRY_DELAY_MS` | First backoff before a CL API retry (milliseconds); it doubles on every retry up to 10 s | no | `500` |
