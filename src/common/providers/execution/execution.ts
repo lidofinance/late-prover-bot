@@ -420,11 +420,12 @@ export class Execution {
   }
 
   private async sendTransactionWithLogging(signedTx: string, populatedTx: any): Promise<TransactionResponse> {
-    this.logger.log(
-      `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`,
-    );
+    const submittedPromise = this.provider.sendTransaction(signedTx);
 
-    const submitted = await this.provider.sendTransaction(signedTx);
+    const logMessage = `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`;
+    this.logger.log(logMessage);
+
+    const submitted = await submittedPromise;
     this.logger.log(`Transaction sent to mempool. Hash: ${submitted.hash}`);
 
     return submitted;
@@ -434,8 +435,11 @@ export class Execution {
     const confirmations = this.config.get('TX_CONFIRMATIONS');
     const timeout = this.config.get('TX_MINING_WAITING_TIMEOUT_MS');
 
-    this.logger.log(`Waiting until the transaction has been mined and confirmed ${confirmations} times`);
-    await this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
+    const waitingPromise = this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
+    const logMessage = `Waiting until the transaction has been mined and confirmed ${confirmations} times`;
+
+    this.logger.log(logMessage);
+    await waitingPromise;
   }
 
   // ==========================================

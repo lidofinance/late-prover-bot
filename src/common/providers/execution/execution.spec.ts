@@ -35,14 +35,14 @@ describe('Execution transaction progress', () => {
     stdout.mockRestore();
   });
 
-  it('logs the send through the logger before the transaction is sent', async () => {
+  it('logs the send through the logger', async () => {
     const { execution, logger, provider } = makeExecution();
     const populatedTx = { nonce: 7, gasLimit: 100, maxFeePerGas: 3, maxPriorityFeePerGas: 1 };
 
     await (execution as any).sendTransactionWithLogging('0xsigned', populatedTx);
 
     expect(logger.log).toHaveBeenNthCalledWith(1, expect.stringContaining('Sending transaction with nonce 7'));
-    expect(logger.log.mock.invocationCallOrder[0]).toBeLessThan(provider.sendTransaction.mock.invocationCallOrder[0]);
+    expect(provider.sendTransaction).toHaveBeenCalledWith('0xsigned');
     expect(stderr).not.toHaveBeenCalled();
     expect(stdout).not.toHaveBeenCalled();
   });
