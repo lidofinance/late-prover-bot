@@ -4,7 +4,6 @@ import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, Optional } from '@nestjs/common';
 import { BigNumber, PopulatedTransaction, Wallet, utils } from 'ethers';
 import { InquirerService } from 'nest-commander';
-import { promise as spinnerFor } from 'ora-classic';
 
 import { bigIntMax, bigIntMin, percentile } from './utils/common';
 import { ConfigService } from '../../config/config.service';
@@ -421,12 +420,11 @@ export class Execution {
   }
 
   private async sendTransactionWithLogging(signedTx: string, populatedTx: any): Promise<TransactionResponse> {
-    const submittedPromise = this.provider.sendTransaction(signedTx);
+    this.logger.log(
+      `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`,
+    );
 
-    const logMessage = `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`;
-    spinnerFor(submittedPromise, { text: logMessage });
-
-    const submitted = await submittedPromise;
+    const submitted = await this.provider.sendTransaction(signedTx);
     this.logger.log(`Transaction sent to mempool. Hash: ${submitted.hash}`);
 
     return submitted;
@@ -436,11 +434,8 @@ export class Execution {
     const confirmations = this.config.get('TX_CONFIRMATIONS');
     const timeout = this.config.get('TX_MINING_WAITING_TIMEOUT_MS');
 
-    const waitingPromise = this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
-    const logMessage = `Waiting until the transaction has been mined and confirmed ${confirmations} times`;
-
-    spinnerFor(waitingPromise, { text: logMessage });
-    await waitingPromise;
+    this.logger.log(`Waiting until the transaction has been mined and confirmed ${confirmations} times`);
+    await this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
   }
 
   // ==========================================
