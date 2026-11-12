@@ -180,7 +180,7 @@ docker build \
 | **Startup Options** | | | |
 | `START_LOOKBACK_DAYS` | Number of days to look back when starting (if no last processed root in memory) | no | `7` |
 | **Logging** | | | |
-| `LOG_LEVEL` | Log level (`debug`, `info`, `notice`, `warning`, `error`) | no | `info` |
+| `LOG_LEVEL` | Log level (`debug`, `info`, `notice`, `warning`, `error`); `notice` works as `info` | no | `info` |
 | `LOG_FORMAT` | Log format (`simple`, `json`) | no | `simple` |
 
 ### Secrets from files
