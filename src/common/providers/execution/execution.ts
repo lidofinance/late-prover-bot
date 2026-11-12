@@ -4,7 +4,6 @@ import { LOGGER_PROVIDER } from '@lido-nestjs/logger';
 import { Inject, Injectable, LoggerService, Optional } from '@nestjs/common';
 import { BigNumber, PopulatedTransaction, Wallet, utils } from 'ethers';
 import { InquirerService } from 'nest-commander';
-import { promise as spinnerFor } from 'ora-classic';
 
 import { bigIntMax, bigIntMin, percentile } from './utils/common';
 import { ConfigService } from '../../config/config.service';
@@ -424,7 +423,7 @@ export class Execution {
     const submittedPromise = this.provider.sendTransaction(signedTx);
 
     const logMessage = `Sending transaction with nonce ${populatedTx.nonce} and gasLimit: ${populatedTx.gasLimit}, maxFeePerGas: ${populatedTx.maxFeePerGas}, maxPriorityFeePerGas: ${populatedTx.maxPriorityFeePerGas}`;
-    spinnerFor(submittedPromise, { text: logMessage });
+    this.logger.log(logMessage);
 
     const submitted = await submittedPromise;
     this.logger.log(`Transaction sent to mempool. Hash: ${submitted.hash}`);
@@ -439,7 +438,7 @@ export class Execution {
     const waitingPromise = this.provider.waitForTransaction(submitted.hash, confirmations, timeout);
     const logMessage = `Waiting until the transaction has been mined and confirmed ${confirmations} times`;
 
-    spinnerFor(waitingPromise, { text: logMessage });
+    this.logger.log(logMessage);
     await waitingPromise;
   }
 

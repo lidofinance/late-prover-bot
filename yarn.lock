@@ -6053,11 +6053,6 @@ neo-async@^2.6.2:
   resolved "https://registry.npmjs.org/neo-async/-/neo-async-2.6.2.tgz#b4aafb93e3aeb2d8174ca53cf163ab7d7308305f"
   integrity sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==
 
-nest-commander-testing@^3.3.0:
-  version "3.5.0"
-  resolved "https://registry.npmjs.org/nest-commander-testing/-/nest-commander-testing-3.5.0.tgz#3eb9203ac1774bf6d0ce40fdd6c0b3bd9b626fe4"
-  integrity sha512-rQ4jEEUOIohu2Rja8XT2UMRVJQMF1+30WM55G3XCvQo9val/X0Ik3OVvcyEOOAvUsVfqdjAkV9XYkkc/2/OVrw==
-
 nest-commander@^3.12.5:
   version "3.20.0"
   resolved "https://registry.npmjs.org/nest-commander/-/nest-commander-3.20.0.tgz#cf8e38ce598c3ebe9fdbf95ef5d8fbe18cb0dd07"
@@ -6224,21 +6219,6 @@ optionator@^0.9.3:
     prelude-ls "^1.2.1"
     type-check "^0.4.0"
     word-wrap "^1.2.5"
-
-ora-classic@^5.4.2:
-  version "5.4.2"
-  resolved "https://registry.npmjs.org/ora-classic/-/ora-classic-5.4.2.tgz#3d53a065d13a1f3b2f9c13ad89177e580f604588"
-  integrity sha512-/xX8D5AMHB+LnvEJHOglmq6pXwm65CQ/gqPrIjIN5GJ1Bl9KC9fSmgzR/FwjrtalDj/WVxukAVuH8GP00Zpiaw==
-  dependencies:
-    bl "^4.1.0"
-    chalk "^4.1.0"
-    cli-cursor "^3.1.0"
-    cli-spinners "^2.5.0"
-    is-interactive "^1.0.0"
-    is-unicode-supported "^0.1.0"
-    log-symbols "^4.1.0"
-    strip-ansi "^6.0.0"
-    wcwidth "^1.0.1"
 
 ora@5.4.1, ora@^5.4.1:
   version "5.4.1"
