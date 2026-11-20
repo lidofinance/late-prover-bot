@@ -105,6 +105,8 @@ When `DRY_RUN=true` is enabled, the bot operates in a safe testing mode:
 
 #### Using Docker Compose (Recommended)
 
+Compose builds the image from the `Dockerfile`, and its base images need a registry login: see [Docker image](#docker-image).
+
 ```bash
 # Start daemon with monitoring stack
 docker-compose up -d daemon prometheus
@@ -128,7 +130,9 @@ yarn run start:prod
 
 #### Docker image
 
-The `Dockerfile` builds a production image in three stages: the build stage compiles the sources, the second stage installs the production dependencies only, and the runtime stage holds `dist`, those dependencies, `package.json` and `build-info.json`. The runtime stage has no npm or yarn: the app starts with `node dist/main`, so the metric names (`late_prover_bot_*`) do not depend on yarn.
+The `Dockerfile` builds a production image in three stages on Docker Hardened Images (`dhi.io/node`, Node 22 on Debian 13): the build stage compiles the sources and, when the build arguments are set, rewrites `build-info.json`, the second stage installs the production dependencies only, and the runtime stage holds `dist`, those dependencies, `package.json`, `build-info.json` and the health check script. The runtime base has no shell, no npm and no yarn: the app starts with `node dist/main`, so the metric names (`late_prover_bot_*`) do not depend on yarn.
+
+The base images come from `dhi.io`, and this registry needs a login. Run `docker login dhi.io` once before `docker build` or `docker-compose up`.
 
 The build arguments `BUILD_VERSION`, `BUILD_BRANCH` and `BUILD_COMMIT` regenerate `build-info.json`, which feeds the `build_info` metric and the startup log. They are set together: without them the file from the checkout is used, and a build with only some of them fails.
 

@@ -1,4 +1,5 @@
-FROM node:22.23.4-trixie-slim AS building
+# Docker Hardened Images: a pull needs `docker login dhi.io`. Only the -dev stages have a shell.
+FROM dhi.io/node:22.23.5-debian13-dev@sha256:30db03f92266c8f6d4098229b573f5bbae0a92b363f593e18edace583d2b18ea AS building
 
 WORKDIR /app
 
@@ -10,32 +11,30 @@ COPY src ./src
 
 RUN yarn typechain && yarn build
 
-FROM node:22.23.4-trixie-slim AS proddeps
+ARG BUILD_VERSION
+ARG BUILD_BRANCH
+ARG BUILD_COMMIT
+COPY docker/write-build-info.js ./docker/
+RUN if [ -n "$BUILD_VERSION$BUILD_BRANCH$BUILD_COMMIT" ]; then \
+      node docker/write-build-info.js "$BUILD_VERSION" "$BUILD_BRANCH" "$BUILD_COMMIT"; \
+    fi
+
+FROM dhi.io/node:22.23.5-debian13-dev@sha256:30db03f92266c8f6d4098229b573f5bbae0a92b363f593e18edace583d2b18ea AS proddeps
 
 WORKDIR /app
 
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --non-interactive --production && yarn cache clean
 
-FROM node:22.23.4-trixie-slim AS production
-
-RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
-    /usr/local/bin/corepack /opt/yarn-v*
+FROM dhi.io/node:22.23.5-debian13@sha256:b6d82c03ceb8763766b387c3c8ff11fa320cf516570f253e704f049f0b922143 AS production
 
 WORKDIR /app
 
 COPY --from=building /app/dist ./dist
 COPY --from=proddeps /app/node_modules ./node_modules
+COPY --from=building /app/build-info.json ./
 COPY package.json ./
-
-ARG BUILD_VERSION
-ARG BUILD_BRANCH
-ARG BUILD_COMMIT
-COPY build-info.json ./
-COPY docker/healthcheck.js docker/write-build-info.js ./docker/
-RUN if [ -n "$BUILD_VERSION$BUILD_BRANCH$BUILD_COMMIT" ]; then \
-      node docker/write-build-info.js "$BUILD_VERSION" "$BUILD_BRANCH" "$BUILD_COMMIT"; \
-    fi
+COPY docker/healthcheck.js ./docker/
 
 EXPOSE 8080
 
